@@ -1,31 +1,33 @@
 //=============================================================================
 //  Module      : strap_latch
-//  Description : HS100 STRAP PIN sampling & locking
+//  Description : HS100 功能类 STRAP PIN 采样 (BOOT_*, WORK_MODE, CLK_PLL_OSC)
 //
-//                功能类 STRAP (BOOT_*, WORK_MODE, CLK_PLL_OSC) 的复位采样逻辑。
-//                DFT 类 STRAP (TEST_MODE / FUNC_MODE) 不在本模块内, 必须由 PAD
-//                异步直通至 DFT 控制逻辑, 详见 strap_dft_ctrl 说明。
+//                与 dft_mode_ctrl 采用同一结构: RSTJ 为低期间触发器保持透明,
+//                RSTJ 释放后无 else 分支, 配置自然冻结, 本次复位周期内不可更改。
 //
-//  Note        : 1. clk 必须使用上电即自由振荡的 OSC 时钟, 不可使用 PLL 输出,
-//                   否则 PLL 未锁定前无法完成采样。
-//                2. por_rst_n 为经过"异步置位 / 同步释放"处理后的上电复位。
-//                3. 复位期间 strap_cfg 保持 STRAP_DEF (等于 PAD 内部上/下拉的
-//                   缺省电平), 保证时钟异常时芯片仍进入确定的缺省状态。
+//                DFT 类 STRAP (TEST_MODE / FUNC_MODE) 不在本模块内, 见
+//                dft_mode_ctrl.v -- 二者结构相同, 但 DFT 类需要时钟缓冲驱动。
+//
+//  Note        : 1. SRC_CLK 必须是上电即自由振荡的时钟 (OSC / XTAL)。
+//                   RSTJ 低电平期间至少须有一个 SRC_CLK 上升沿。
+//                2. STRAP_IN 直接取自 PINPAD 的 in 端, 不插同步器。
+//                3. STRAP_CONFIG 带缺省值复位并非必需, 但功能类 STRAP 由
+//                   Boot ROM 读取, 上电不定值可能被误采样, 故此处保留
+//                   STRAP_DEF 作为上电初值, 由独立的上电复位 POR_N 置入。
+//                   若 SOC 内无更早的 POR_N 可用, 可删除该复位, 行为与
+//                   dft_mode_ctrl 完全一致。
 //=============================================================================
 module strap_latch (
-                test_mode,
-                test_se,
-                clk,
-                por_rst_n,
+                SRC_CLK,
+                RSTJ,
+                POR_N,
 
-                strap_pin,
-
-                strap_cfg,
-                strap_lock
+                STRAP_IN,
+                STRAP_CFG
                 );
 
 //-----------------------------------------------------------------------------
-// STRAP bit map (与《HS100 TEST MODE》STRAP PIN 配置表一致)
+// STRAP bit map (与《HS100 测试模式设计说明》2.2 节配置表一致)
 //-----------------------------------------------------------------------------
 //   bit       strap signal      mux pin        pad type      default
 //   [0]       CLK_PLL_OSC       XUART0_RXD     PBSU8RNC      1 (pull-up)
@@ -35,98 +37,40 @@ module strap_latch (
 //   [6]       BOOT_NOR_NAND     XMTR2          PBCD8RNC      0 (pull-down)
 //   [7]       BOOT_EMMC         XMTR3          PBCD8RNC      0 (pull-down)
 //-----------------------------------------------------------------------------
-parameter SW      = 8;                  // strap 位宽
-parameter CAP_DLY = 4;                  // 解复位后第 CAP_DLY-1 拍捕获
-parameter STRAP_DEF = 8'b0000_111_1;    // PAD 缺省电平
+parameter SW = 8;
+parameter STRAP_DEF = 8'b0000_111_1;    // PAD 内部上/下拉决定的缺省电平
 
-input               test_mode;
-input               test_se;
-input               clk;
-input               por_rst_n;
-input  [SW-1:0]     strap_pin;          // 来自 PAD 的原始电平 (未经处理)
+input               SRC_CLK;
+input               RSTJ;               // 低有效复位, 兼作 STRAP 采样窗口
+input               POR_N;              // 上电复位, 仅用于置入缺省初值
+input  [SW-1:0]     STRAP_IN;           // 来自 PINPAD in 端的原始电平
 
-output [SW-1:0]     strap_cfg;          // 锁存后的配置值, 复位前保持缺省值
-output              strap_lock;         // 1 = 采样完成, 配置已锁定
+output [SW-1:0]     STRAP_CFG;          // 冻结后的配置值, 供 Boot ROM / 软件读取
 
-reg    [SW-1:0]     strap_cfg;
-reg                 strap_lock;
+reg    [SW-1:0]     STRAP_CONFIG;
 
-reg    [SW-1:0]     strap_sync_d0;
-reg    [SW-1:0]     strap_sync_d1;
-reg    [CAP_DLY-1:0] cap_sr;
+assign STRAP_CFG = STRAP_CONFIG;
 
-//-----------------------------------------------------------------------------
-// part 1 : 两级同步器, 消除 PAD 电平与采样时钟之间可能的亚稳态
-//          strap 在 T_setup/T_hold 窗口内是静态的, 同步器仅作为工程裕量。
-//-----------------------------------------------------------------------------
-always @ (posedge clk or negedge por_rst_n)
+always @ (posedge SRC_CLK or negedge POR_N)
 begin
-    if (!por_rst_n) begin
-        strap_sync_d0 <= #1 STRAP_DEF;
-        strap_sync_d1 <= #1 STRAP_DEF;
-    end
-    else begin
-        strap_sync_d0 <= #1 strap_pin;
-        strap_sync_d1 <= #1 strap_sync_d0;
-    end
+    if (!POR_N)
+        STRAP_CONFIG <= #1 STRAP_DEF;   // 常量, 可正确映射为 DFFR/DFFS
+    else if (!RSTJ)
+        STRAP_CONFIG <= #1 STRAP_IN;    // RSTJ 低: 透明采样; RSTJ 高: 保持
 end
 
 //-----------------------------------------------------------------------------
-// part 2 : 解复位后产生单拍捕获使能。cap_sr 复位后依次为
-//          0000 -> 0001 -> 0011 -> 0111 -> 1111 (此后饱和),
-//          cap_en 只在 0111 这一拍为高, 全芯片仅捕获一次。
-//-----------------------------------------------------------------------------
-always @ (posedge clk or negedge por_rst_n)
-begin
-    if (!por_rst_n)
-        cap_sr <= #1 {CAP_DLY{1'b0}};
-    else
-        cap_sr <= #1 {cap_sr[CAP_DLY-2:0], 1'b1};
-end
-
-wire cap_en = cap_sr[CAP_DLY-2] & (~cap_sr[CAP_DLY-1]);
-
-//-----------------------------------------------------------------------------
-// part 3 : 捕获并锁存。strap_lock 置位后无任何通路可改写 strap_cfg,
-//          只有重新复位 (por_rst_n 拉低) 才能重新采样,
-//          即"配置一经锁存, 本次复位周期内不可更改"。
-//-----------------------------------------------------------------------------
-always @ (posedge clk or negedge por_rst_n)
-begin
-    if (!por_rst_n)
-        strap_cfg <= #1 STRAP_DEF;
-    else if (cap_en && !strap_lock)
-        strap_cfg <= #1 strap_sync_d1;
-end
-
-always @ (posedge clk or negedge por_rst_n)
-begin
-    if (!por_rst_n)
-        strap_lock <= #1 1'b0;
-    else if (cap_en)
-        strap_lock <= #1 1'b1;
-end
-
-//-----------------------------------------------------------------------------
-// part 4 : 断言 (仅用于仿真, 综合时不可见)
+// 断言 (仅用于仿真, 综合不可见)
 //-----------------------------------------------------------------------------
 // synopsys translate_off
 `ifdef SVA_ON
-    // 锁存完成后, strap_cfg 不得再发生任何变化
+    // RSTJ 释放后 STRAP_CFG 不得再发生任何变化
     property p_strap_frozen;
-        @(posedge clk) disable iff (!por_rst_n)
-            strap_lock |=> $stable(strap_cfg);
+        @(posedge SRC_CLK) disable iff (!POR_N)
+            RSTJ |=> $stable(STRAP_CFG);
     endproperty
     a_strap_frozen : assert property (p_strap_frozen)
-        else $error("STRAP config changed after lock !");
-
-    // 捕获使能在一次复位周期内有且仅有一拍
-    property p_cap_once;
-        @(posedge clk) disable iff (!por_rst_n)
-            cap_en |=> always (!cap_en);
-    endproperty
-    a_cap_once : assert property (p_cap_once)
-        else $error("STRAP capture pulse asserted more than once !");
+        else $error("STRAP config changed after RSTJ release !");
 `endif
 // synopsys translate_on
 

@@ -25,14 +25,22 @@ HS100 的测试模式划分为以下三个子模式：
 
 ### 1.2 测试模式的进入方式
 
-HS100 不提供软件方式进入测试模式，测试模式只能通过 STRAP PIN 的外部电平配置进入。按生效机制的不同，STRAP PIN 分为两类：
+HS100 不提供软件方式进入测试模式，测试模式只能通过 STRAP PIN 的外部电平配置进入。
 
-- **DFT 类（异步直通）**：`TEST_MODE`、`FUNC_MODE`。由引脚电平实时、异步地决定芯片所处模式，不依赖时钟与复位。
-- **功能类（复位锁存）**：`BOOT_*`、`WORK_MODE[2:0]`、`CLK_PLL_OSC`。在复位释放时刻被采样并锁存，锁存后在本次复位周期内不可更改，必须重新复位才能使新的配置生效。
+芯片复位期间（`RSTJ` 为低），片内配置寄存器对 STRAP 引脚电平保持透明，每个自由振荡时钟 `SRC_CLK` 的上升沿重新采样一次；复位释放后配置寄存器不再有写入通路，配置即被冻结。因此：
 
-DFT 类信号之所以不做锁存，是因为扫描测试开始前 ATE 尚未提供可靠时钟、功能复位也已被测试逻辑接管；若模式位依赖时钟沿建立，芯片将无法进入 SCAN_MODE。具体实现见附录 A。
+- STRAP 只需在复位释放前后的一个时钟周期窗口内稳定，对板级时序要求宽松；
+- 配置一经冻结，在本次复位周期内不可更改，必须重新复位才能使新的配置生效；
+- 冻结后引脚上的毛刺、串扰或 ESD 不再能改变芯片模式，运行中的软件亦无法激活测试模式，有利于产品安全性。
 
-该设计保证测试模式无法由运行中的软件激活，有利于产品安全性。
+按用途，STRAP PIN 分为两类，二者采样结构完全相同，区别仅在于下游驱动方式：
+
+| 类别 | 信号 | 下游处理 |
+|---|---|---|
+| DFT 类 | `TEST_MODE`、`FUNC_MODE` | 经时钟缓冲单元驱动、走时钟网络；配置寄存器排除在扫描链之外 |
+| 功能类 | `BOOT_*`、`WORK_MODE[2:0]`、`CLK_PLL_OSC` | 经普通逻辑驱动，供 Boot ROM 与软件读取 |
+
+DFT 类信号扇出至全芯片每一个 scan mux，扇出量级与时钟、复位相当，必须按时钟网络处理才能保证全片低偏斜。具体实现见附录 A。
 
 ---
 
@@ -83,7 +91,7 @@ STRAP PIN 具有以下典型特征：
 3. **复用功能冲突规避**：STRAP PIN 在采样完成后会切换为 UART / I²C / GPIO 等功能，设计时须确认外接的配置电阻及下游器件不会干扰其正常功能。尤其注意：
    - `XUART0_TXD` / `XUART0_RXD` 复用为调试串口，其配置电阻不应影响串口通信的上升/下降沿质量；
    - `XIIC0_SCL` / `XIIC1_SCL` / `XIIC1_SDA` 复用为 I²C 总线，其 STRAP 配置电阻应与 I²C 总线上拉电阻统筹考虑，避免与总线规定的上拉阻值冲突。
-4. **测试模式引脚防误触发**：量产板卡上 `TEST_MODE`、`FUNC_MODE` 应保持缺省状态（悬空或明确固定到正常模式电平），避免因走线耦合或外部干扰误入测试模式。由于这两根信号为异步直通，运行过程中的电平变化会立即生效，因此其布线应远离高速信号，必要时串联小阻值电阻并就近加去耦。
+4. **测试模式引脚防误触发**：量产板卡上 `TEST_MODE`、`FUNC_MODE` 应保持缺省状态（悬空或明确固定到正常模式电平），避免因走线耦合或外部干扰在复位窗口内误入测试模式。复位释放后该配置已冻结，引脚上的后续干扰不再生效，但复位期间的布线质量仍需保证：走线应远离高速信号，必要时就近加去耦电容。
 
 **表 2-3　STRAP PIN 采样时序要求**
 
@@ -91,14 +99,15 @@ STRAP PIN 具有以下典型特征：
 |---|---|---|---|
 | T_setup | 复位释放沿之前 STRAP 电平须稳定的时间 | 1 | μs |
 | T_hold | 复位释放沿之后 STRAP 电平须保持的时间 | 1 | μs |
+| T_rstlow | 复位低电平须持续的时间（期间 `SRC_CLK` 至少须有一个上升沿） | 1 | μs |
 
-> 上述指标按内部 24 MHz OSC 时钟推导（详见附录 A 第 A.5 节），已包含 4 倍工程裕量。
+> 上述指标按内部 24 MHz OSC 时钟推导（详见附录 A 第 A.6 节），已包含 20 倍以上工程裕量。
 
 ---
 
 ## 附录 A　STRAP PIN 参考实现
 
-本附录给出 STRAP PIN 采样与测试模式译码的 RTL 参考实现，供客户在系统集成、时序约束编写以及板级调试时参考。
+本附录给出 STRAP PIN 采样与测试模式译码的 RTL 参考实现，供客户在系统集成、时序约束编写以及板级调试时参考。该结构与已量产芯片所采用的实现方式一致。
 
 ### A.1 实现架构
 
@@ -106,61 +115,165 @@ STRAP 相关逻辑分为三层：
 
 | 层次 | 内容 | 对应模块 |
 |---|---|---|
-| PAD 层 | 内部上/下拉使能、输出驱动关断、复用功能切换 | `strap_mode_ctrl`（part 3） |
-| 采样锁存层 | 功能类 STRAP 的复位采样与上锁 | `strap_latch` |
-| 模式使用层 | DFT 类 STRAP 的异步直通与模式译码 | `strap_mode_ctrl`（part 1、part 2） |
+| 采样冻结层（DFT 类） | `TEST_MODE` / `FUNC_MODE` 的采样、冻结与时钟缓冲驱动 | `dft_mode_ctrl` |
+| 采样冻结层（功能类） | `BOOT_*` / `WORK_MODE` / `CLK_PLL_OSC` 的采样与冻结 | `strap_latch` |
+| 译码与交接层 | 模式译码、复位与时钟旁路、PAD 复用功能交接 | `strap_mode_ctrl` |
 
-两类 STRAP 的实现方式对比：
+### A.2 采样冻结的标准写法
 
-| 类别 | 信号 | 实现方式 | 原因 |
-|---|---|---|---|
-| DFT 类（异步直通） | TEST_MODE、FUNC_MODE、SCAN_EN | PAD → buffer → 直接驱动 DFT mux，不经任何触发器 | 必须在无时钟、复位被旁路的条件下生效 |
-| 功能类（复位锁存） | BOOT_*、WORK_MODE[2:0]、CLK_PLL_OSC | 解复位后固定拍数捕获一次，随即上锁 | 供 Boot ROM / 软件读取，需防止运行中被复用功能干扰 |
-
-### A.2 常见错误写法
-
-以下写法无法综合出正确电路，请勿采用：
+核心结构只有四行：
 
 ```verilog
-// ✗ 错误：异步复位触发器的复位值必须是常量
-always @(posedge clk or negedge rst_n)
-    if (!rst_n) strap_cfg <= strap_pin;   // 综合推不出 DFFR，会报错或推成锁存器
-    else        strap_cfg <= strap_cfg;
+reg TEST_MODE_CONFIG;
+
+always @ (posedge SRC_CLK)
+begin
+    if (!RSTJ)
+        TEST_MODE_CONFIG <= DFT_STRAP_IN;
+end
 ```
 
-正确做法是将复位值取为 PAD 缺省电平（常量），解复位后再用一个一次性使能脉冲去捕获真实管脚值。
+其工作机制为：
 
-### A.3 采样锁存模块 strap_latch
+1. `RSTJ` 为低期间，触发器对 PAD 电平保持透明，每个 `SRC_CLK` 上升沿重新采样一次；
+2. always 块**没有 else 分支**，`RSTJ` 拉高后触发器不存在任何写入通路，配置自然冻结；
+3. 因此**无需额外的 lock 标志位或捕获使能脉冲**，锁存由电路结构本身保证。
+
+综合工具对该 always 块的理解是：敏感表中只有 `posedge SRC_CLK`，故 `RSTJ` 并非复位，而是一个普通的数据使能。综合结果为一个带使能触发器（DFFE），使能端 `EN = ~RSTJ`。
+
+### A.3 与异步复位写法的区别
+
+下述写法形似而实质不同，**不可采用**：
+
+```verilog
+// ✗ 错误：敏感表中含 rst_n，该 always 块描述的是异步复位触发器，
+//        其复位分支必须是常量，否则无法映射为 DFFR，综合会报错或推出锁存器
+always @ (posedge clk or negedge rst_n)
+    if (!rst_n) q <= D;
+```
+
+```verilog
+// ✓ 正确：敏感表中只有 clk，rst_n 仅是普通数据使能，映射为 DFFE
+always @ (posedge clk)
+    if (!rst_n) q <= D;
+```
+
+两者综合出的是完全不同的电路，编写时须特别注意敏感表的写法。
+
+### A.4 DFT 模式配置模块 dft_mode_ctrl
+
+```verilog
+//=============================================================================
+//  Module      : dft_mode_ctrl
+//  Description : HS100 DFT 模式配置采样 (TEST_MODE / FUNC_MODE)
+//
+//                实现方式与量产芯片 DFT_MODE_CTRL 保持一致:
+//                RSTJ 为低期间, 触发器对 PAD 电平保持透明, 每个 SRC_CLK 上升沿
+//                重新采样一次; RSTJ 释放后 always 块无 else 分支, 触发器自然
+//                保持, 配置即被冻结 -- 锁存无需额外的 lock 标志位。
+//
+//                该结构同时提供安全特性: 模式位一经冻结, 引脚上的毛刺/串扰/ESD
+//                不再能改变芯片模式, 必须重新复位才能重新配置。
+//
+//  Note        : 1. SRC_CLK 必须是上电即自由振荡的时钟 (OSC / XTAL), 不可使用
+//                   PLL 输出。RSTJ 低电平期间 SRC_CLK 至少须有一个上升沿,
+//                   否则采样不会发生。
+//                2. RSTJ 应取自"异步置位 / 同步释放"复位同步器的输出, 与
+//                   SRC_CLK 同步, 以免其释放沿落在触发器使能端的建立保持窗口内。
+//                3. *_STRAP_IN 直接取自 PINPAD 的 in 端 (如 XGPIO_RA_14_IN),
+//                   中间不插同步器 -- STRAP 由板级电阻决定, 是直流静态电平。
+//                4. *_CONFIG 不带复位: 加复位会形成循环依赖 (用哪个复位去复位
+//                   模式位本身)。上电至首个 SRC_CLK 上升沿之间其值不确定,
+//                   但此窗口内 RSTJ 恒为低, 芯片处于复位态, 不会误动作。
+//
+//  DFT         : TEST_MODE_CONFIG / FUNC_MODE_CONFIG 必须排除在扫描链之外
+//                (set_dont_touch / no scan replacement); TEST_MODE 与 FUNC_MODE
+//                须设置 set_ideal_network, 并在 ATPG 中作为 test constant 处理。
+//=============================================================================
+module dft_mode_ctrl (
+                SRC_CLK,
+                RSTJ,
+
+                TEST_STRAP_IN,
+                FUNC_STRAP_IN,
+
+                TEST_MODE,
+                FUNC_MODE
+                );
+
+input           SRC_CLK;        // 自由振荡时钟, 复位期间即有效
+input           RSTJ;           // 低有效复位, 同时作为 STRAP 采样窗口
+input           TEST_STRAP_IN;  // XGPIO_5  PAD in 端 (PBCD8RNC, 缺省 L)
+input           FUNC_STRAP_IN;  // XUART0_TXD PAD in 端 (PBSU8RNC, 缺省 H)
+
+output          TEST_MODE;      // 1 = 进入 DFT Test Mode
+output          FUNC_MODE;      // 1 = Function Mode, 0 = AIP / MBIST Test Mode
+
+reg             TEST_MODE_CONFIG;
+reg             FUNC_MODE_CONFIG;
+
+//-----------------------------------------------------------------------------
+// part 1 : 复位期间透明采样, 复位释放后自然冻结
+//-----------------------------------------------------------------------------
+always @ (posedge SRC_CLK)
+begin
+    if (!RSTJ) begin
+        TEST_MODE_CONFIG <= #1 TEST_STRAP_IN;
+        FUNC_MODE_CONFIG <= #1 FUNC_STRAP_IN;
+    end
+end
+
+//-----------------------------------------------------------------------------
+// part 2 : 输出缓冲
+//          TEST_MODE / FUNC_MODE 扇出至全芯片每一个 scan mux, 扇出量级与
+//          时钟、复位相当, 因此使用时钟缓冲单元驱动并走时钟网络, 以保证全片
+//          低 skew。若交由综合工具按普通逻辑自行 buffer, 延迟与偏斜不可控。
+//-----------------------------------------------------------------------------
+P1_CLKBUF U_TEST_MODE (.A(TEST_MODE_CONFIG), .Z(TEST_MODE));
+P1_CLKBUF U_FUNC_MODE (.A(FUNC_MODE_CONFIG), .Z(FUNC_MODE));
+
+endmodule
+```
+
+**关于 `P1_CLKBUF`**：`TEST_MODE` / `FUNC_MODE` 扇出至全芯片每一个 scan mux，扇出量级与时钟、复位相当。使用时钟缓冲单元驱动并走时钟网络，才能保证全片低偏斜；若按普通逻辑交由综合工具自行 buffer，延迟与偏斜均不可控。综合时须对这两条网络设置 `set_ideal_network`，并在 ATPG 中作为 test constant 处理。
+
+**关于配置寄存器不带复位**：`TEST_MODE_CONFIG` 刻意不加复位。若为其添加复位，则需要另一个更早的复位信号来复位模式位本身，形成循环依赖。上电至首个 `SRC_CLK` 上升沿之间该寄存器值不确定，但此窗口内 `RSTJ` 恒为低、芯片处于复位态，不会产生误动作。RTL 仿真中该窗口会出现 X 值，属预期行为。
+
+**关于不加同步器**：`*_STRAP_IN` 直接取自 PINPAD 的 in 端（如 `XGPIO_RA_14_IN`），中间不插两级同步器。STRAP 电平由板级上下拉电阻决定，是直流静态电平，不存在跨时钟域问题；插入同步器只会额外增加对 T_hold 的要求。
+
+### A.5 功能类 STRAP 采样模块 strap_latch
 
 ```verilog
 //=============================================================================
 //  Module      : strap_latch
-//  Description : HS100 STRAP PIN sampling & locking
+//  Description : HS100 功能类 STRAP PIN 采样 (BOOT_*, WORK_MODE, CLK_PLL_OSC)
 //
-//                功能类 STRAP (BOOT_*, WORK_MODE, CLK_PLL_OSC) 的复位采样逻辑。
-//                DFT 类 STRAP (TEST_MODE / FUNC_MODE) 不在本模块内, 必须由 PAD
-//                异步直通至 DFT 控制逻辑, 详见 strap_mode_ctrl 说明。
+//                与 dft_mode_ctrl 采用同一结构: RSTJ 为低期间触发器保持透明,
+//                RSTJ 释放后无 else 分支, 配置自然冻结, 本次复位周期内不可更改。
 //
-//  Note        : 1. clk 必须使用上电即自由振荡的 OSC 时钟, 不可使用 PLL 输出,
-//                   否则 PLL 未锁定前无法完成采样。
-//                2. por_rst_n 为经过"异步置位 / 同步释放"处理后的上电复位。
-//                3. 复位期间 strap_cfg 保持 STRAP_DEF (等于 PAD 内部上/下拉的
-//                   缺省电平), 保证时钟异常时芯片仍进入确定的缺省状态。
+//                DFT 类 STRAP (TEST_MODE / FUNC_MODE) 不在本模块内, 见
+//                dft_mode_ctrl.v -- 二者结构相同, 但 DFT 类需要时钟缓冲驱动。
+//
+//  Note        : 1. SRC_CLK 必须是上电即自由振荡的时钟 (OSC / XTAL)。
+//                   RSTJ 低电平期间至少须有一个 SRC_CLK 上升沿。
+//                2. STRAP_IN 直接取自 PINPAD 的 in 端, 不插同步器。
+//                3. STRAP_CONFIG 带缺省值复位并非必需, 但功能类 STRAP 由
+//                   Boot ROM 读取, 上电不定值可能被误采样, 故此处保留
+//                   STRAP_DEF 作为上电初值, 由独立的上电复位 POR_N 置入。
+//                   若 SOC 内无更早的 POR_N 可用, 可删除该复位, 行为与
+//                   dft_mode_ctrl 完全一致。
 //=============================================================================
 module strap_latch (
-                test_mode,
-                test_se,
-                clk,
-                por_rst_n,
+                SRC_CLK,
+                RSTJ,
+                POR_N,
 
-                strap_pin,
-
-                strap_cfg,
-                strap_lock
+                STRAP_IN,
+                STRAP_CFG
                 );
 
 //-----------------------------------------------------------------------------
-// STRAP bit map (与 2.2 节 STRAP PIN 配置表一致)
+// STRAP bit map (与《HS100 测试模式设计说明》2.2 节配置表一致)
 //-----------------------------------------------------------------------------
 //   bit       strap signal      mux pin        pad type      default
 //   [0]       CLK_PLL_OSC       XUART0_RXD     PBSU8RNC      1 (pull-up)
@@ -170,222 +283,167 @@ module strap_latch (
 //   [6]       BOOT_NOR_NAND     XMTR2          PBCD8RNC      0 (pull-down)
 //   [7]       BOOT_EMMC         XMTR3          PBCD8RNC      0 (pull-down)
 //-----------------------------------------------------------------------------
-parameter SW      = 8;                  // strap 位宽
-parameter CAP_DLY = 4;                  // 解复位后第 CAP_DLY-1 拍捕获
-parameter STRAP_DEF = 8'b0000_111_1;    // PAD 缺省电平
+parameter SW = 8;
+parameter STRAP_DEF = 8'b0000_111_1;    // PAD 内部上/下拉决定的缺省电平
 
-input               test_mode;
-input               test_se;
-input               clk;
-input               por_rst_n;
-input  [SW-1:0]     strap_pin;          // 来自 PAD 的原始电平 (未经处理)
+input               SRC_CLK;
+input               RSTJ;               // 低有效复位, 兼作 STRAP 采样窗口
+input               POR_N;              // 上电复位, 仅用于置入缺省初值
+input  [SW-1:0]     STRAP_IN;           // 来自 PINPAD in 端的原始电平
 
-output [SW-1:0]     strap_cfg;          // 锁存后的配置值, 复位前保持缺省值
-output              strap_lock;         // 1 = 采样完成, 配置已锁定
+output [SW-1:0]     STRAP_CFG;          // 冻结后的配置值, 供 Boot ROM / 软件读取
 
-reg    [SW-1:0]     strap_cfg;
-reg                 strap_lock;
+reg    [SW-1:0]     STRAP_CONFIG;
 
-reg    [SW-1:0]     strap_sync_d0;
-reg    [SW-1:0]     strap_sync_d1;
-reg    [CAP_DLY-1:0] cap_sr;
+assign STRAP_CFG = STRAP_CONFIG;
 
-//-----------------------------------------------------------------------------
-// part 1 : 两级同步器, 消除 PAD 电平与采样时钟之间可能的亚稳态
-//          strap 在 T_setup/T_hold 窗口内是静态的, 同步器仅作为工程裕量。
-//-----------------------------------------------------------------------------
-always @ (posedge clk or negedge por_rst_n)
+always @ (posedge SRC_CLK or negedge POR_N)
 begin
-    if (!por_rst_n) begin
-        strap_sync_d0 <= #1 STRAP_DEF;
-        strap_sync_d1 <= #1 STRAP_DEF;
-    end
-    else begin
-        strap_sync_d0 <= #1 strap_pin;
-        strap_sync_d1 <= #1 strap_sync_d0;
-    end
+    if (!POR_N)
+        STRAP_CONFIG <= #1 STRAP_DEF;   // 常量, 可正确映射为 DFFR/DFFS
+    else if (!RSTJ)
+        STRAP_CONFIG <= #1 STRAP_IN;    // RSTJ 低: 透明采样; RSTJ 高: 保持
 end
 
 //-----------------------------------------------------------------------------
-// part 2 : 解复位后产生单拍捕获使能。cap_sr 复位后依次为
-//          0000 -> 0001 -> 0011 -> 0111 -> 1111 (此后饱和),
-//          cap_en 只在 0111 这一拍为高, 全芯片仅捕获一次。
-//-----------------------------------------------------------------------------
-always @ (posedge clk or negedge por_rst_n)
-begin
-    if (!por_rst_n)
-        cap_sr <= #1 {CAP_DLY{1'b0}};
-    else
-        cap_sr <= #1 {cap_sr[CAP_DLY-2:0], 1'b1};
-end
-
-wire cap_en = cap_sr[CAP_DLY-2] & (~cap_sr[CAP_DLY-1]);
-
-//-----------------------------------------------------------------------------
-// part 3 : 捕获并锁存。strap_lock 置位后无任何通路可改写 strap_cfg,
-//          只有重新复位 (por_rst_n 拉低) 才能重新采样,
-//          即"配置一经锁存, 本次复位周期内不可更改"。
-//-----------------------------------------------------------------------------
-always @ (posedge clk or negedge por_rst_n)
-begin
-    if (!por_rst_n)
-        strap_cfg <= #1 STRAP_DEF;
-    else if (cap_en && !strap_lock)
-        strap_cfg <= #1 strap_sync_d1;
-end
-
-always @ (posedge clk or negedge por_rst_n)
-begin
-    if (!por_rst_n)
-        strap_lock <= #1 1'b0;
-    else if (cap_en)
-        strap_lock <= #1 1'b1;
-end
-
-//-----------------------------------------------------------------------------
-// part 4 : 断言 (仅用于仿真, 综合时不可见)
+// 断言 (仅用于仿真, 综合不可见)
 //-----------------------------------------------------------------------------
 // synopsys translate_off
 `ifdef SVA_ON
-    // 锁存完成后, strap_cfg 不得再发生任何变化
+    // RSTJ 释放后 STRAP_CFG 不得再发生任何变化
     property p_strap_frozen;
-        @(posedge clk) disable iff (!por_rst_n)
-            strap_lock |=> $stable(strap_cfg);
+        @(posedge SRC_CLK) disable iff (!POR_N)
+            RSTJ |=> $stable(STRAP_CFG);
     endproperty
     a_strap_frozen : assert property (p_strap_frozen)
-        else $error("STRAP config changed after lock !");
-
-    // 捕获使能在一次复位周期内有且仅有一拍
-    property p_cap_once;
-        @(posedge clk) disable iff (!por_rst_n)
-            cap_en |=> always (!cap_en);
-    endproperty
-    a_cap_once : assert property (p_cap_once)
-        else $error("STRAP capture pulse asserted more than once !");
+        else $error("STRAP config changed after RSTJ release !");
 `endif
 // synopsys translate_on
 
 endmodule
 ```
 
-### A.4 模式译码与 PAD 交接模块 strap_mode_ctrl
+### A.6 译码与 PAD 交接模块 strap_mode_ctrl
 
 ```verilog
 //=============================================================================
 //  Module      : strap_mode_ctrl
 //  Description : HS100 测试模式译码 + STRAP PIN 与复用功能的交接控制
 //
-//  CRITICAL    : test_mode_pin / func_mode_pin 由 PAD 异步直通, 中间不允许插入
-//                任何触发器或锁存器。扫描测试时 ATE 尚未提供可靠时钟, 功能复位
-//                也已被旁路, 若模式位依赖时钟沿建立, 芯片将永远无法进入
-//                SCAN_MODE。综合脚本中必须对这两条路径设置
-//                set_case_analysis / set_dont_touch, 并作为 DFT constant 处理。
+//                TEST_MODE / FUNC_MODE 由 dft_mode_ctrl 采样冻结后送入本模块,
+//                本模块只做纯组合译码与 PAD 交接, 不含任何时序元件。
 //=============================================================================
 module strap_mode_ctrl (
-                // --- 来自 PAD 的原始电平 (异步, 不经采样) ---
-                test_mode_pin,
-                func_mode_pin,
-                scan_rst_n_pin,
-                scan_clk_pin,
+                // --- 来自 dft_mode_ctrl 的已冻结模式位 ---
+                TEST_MODE,
+                FUNC_MODE,
+                WORK_MODE,
+
+                // --- ATE 侧 ---
+                SCAN_RSTJ_PIN,
+                SCAN_CLK_PIN,
 
                 // --- 功能侧 ---
-                por_rst_n,
-                func_clk,
-                strap_lock,
-                func_oen,
+                RSTJ,
+                FUNC_CLK,
+                FUNC_OEN,
 
                 // --- 输出 ---
-                test_mode,
-                scan_mode,
-                aip_es_mode,
-                mbist_mode,
-                sys_rst_n,
-                sys_clk,
-                pad_oen,
-                pinmux_sel
+                SCAN_MODE,
+                AIP_ES_MODE,
+                MBIST_MODE,
+                SYS_RSTJ,
+                SYS_CLK,
+                PAD_OEN,
+                PINMUX_SEL
                 );
 
 parameter PW = 8;               // 参与 STRAP 复用的 PAD 个数
 
-input           test_mode_pin;
-input           func_mode_pin;
-input           scan_rst_n_pin;
-input           scan_clk_pin;
+input           TEST_MODE;
+input           FUNC_MODE;
+input  [2:0]    WORK_MODE;
 
-input           por_rst_n;
-input           func_clk;
-input           strap_lock;
-input  [PW-1:0] func_oen;
+input           SCAN_RSTJ_PIN;
+input           SCAN_CLK_PIN;
 
-output          test_mode;
-output          scan_mode;
-output          aip_es_mode;
-output          mbist_mode;
-output          sys_rst_n;
-output          sys_clk;
-output [PW-1:0] pad_oen;
-output          pinmux_sel;
+input           RSTJ;
+input           FUNC_CLK;
+input  [PW-1:0] FUNC_OEN;
+
+output          SCAN_MODE;
+output          AIP_ES_MODE;
+output          MBIST_MODE;
+output          SYS_RSTJ;
+output          SYS_CLK;
+output [PW-1:0] PAD_OEN;
+output          PINMUX_SEL;
 
 //-----------------------------------------------------------------------------
-// part 1 : 模式译码 -- 纯组合, 无任何时序元件
+// part 1 : 模式译码 -- 纯组合
 //-----------------------------------------------------------------------------
-//   TEST_MODE  FUNC_MODE  |  mode
-//   ----------------------+------------------------------------
-//       0          x      |  Normal / Function Mode
-//       1          1      |  SCAN_MODE
-//       1          0      |  AIP_ES_MODE / MBIST_MODE
-//                         |  (二者由 WORK_MODE[2:0] 进一步区分, 待补充)
+//   TEST_MODE  FUNC_MODE  WORK_MODE  |  mode
+//   ---------------------------------+------------------------------------
+//       0          x          x      |  Normal / Function Mode
+//       1          1          x      |  SCAN_MODE
+//       1          0        (待定)    |  AIP_ES_MODE / MBIST_MODE
 //-----------------------------------------------------------------------------
-assign test_mode   =  test_mode_pin;
-assign scan_mode   =  test_mode_pin &   func_mode_pin;
-assign aip_es_mode =  test_mode_pin & (~func_mode_pin);
-assign mbist_mode  =  test_mode_pin & (~func_mode_pin);   // TODO: 按 WORK_MODE 区分
+assign SCAN_MODE   =  TEST_MODE &   FUNC_MODE;
+assign AIP_ES_MODE =  TEST_MODE & (~FUNC_MODE);
+assign MBIST_MODE  =  TEST_MODE & (~FUNC_MODE);   // TODO: 按 WORK_MODE 区分
 
 //-----------------------------------------------------------------------------
 // part 2 : 复位与时钟旁路
-//          扫描模式下复位必须由 ATE 直接可控, 因此绕开复位同步器;
-//          时钟同理, 由 ATE 驱动。此处用普通 mux 只是示意, 时钟切换须使用
-//          glitch-free 结构 (见 clk_switch_2to1.v) 或 DFT mux 单元。
+//          扫描模式下复位与时钟必须由 ATE 直接可控, 因此绕开功能复位与功能时钟。
+//          此处 mux 仅为示意, 时钟切换须使用 glitch-free 结构
+//          (见 clk_switch_2to1.v) 或工艺库提供的 DFT mux 单元。
 //-----------------------------------------------------------------------------
-assign sys_rst_n = test_mode_pin ? scan_rst_n_pin : por_rst_n;
-assign sys_clk   = test_mode_pin ? scan_clk_pin   : func_clk;
+assign SYS_RSTJ = TEST_MODE ? SCAN_RSTJ_PIN : RSTJ;
+assign SYS_CLK  = TEST_MODE ? SCAN_CLK_PIN  : FUNC_CLK;
 
 //-----------------------------------------------------------------------------
 // part 3 : PAD 交接
-//          复位期间及采样完成前, 所有 STRAP 复用 PAD 强制为输入 (oen = 1),
-//          输出驱动关闭, 内部上/下拉保持使能, 以免片内逻辑与外部配置电阻打架。
-//          strap_lock 拉高后才交还给复用功能。
+//          RSTJ 为低期间所有 STRAP 复用 PAD 强制为输入 (oen = 1), 输出驱动关闭,
+//          内部上/下拉保持使能, 以免片内逻辑与外部配置电阻打架。
+//          RSTJ 释放时配置已在同一时刻冻结, 故可直接以 RSTJ 作为交接信号。
 //-----------------------------------------------------------------------------
-assign pad_oen    = strap_lock ? func_oen : {PW{1'b1}};
-assign pinmux_sel = strap_lock;     // 0 = STRAP 采样态, 1 = 复用功能态
+assign PAD_OEN    = RSTJ ? FUNC_OEN : {PW{1'b1}};
+assign PINMUX_SEL = RSTJ;       // 0 = STRAP 采样态, 1 = 复用功能态
 
 endmodule
 ```
 
-### A.5 顶层集成示例与时序参数推导
+### A.7 顶层集成示例与时序参数推导
 
-`CLK_PLL_OSC` 用于选择 A45 CPU 的时钟源。该信号**必须**先经 `strap_latch` 锁存后再驱动时钟切换单元；若直接从 PAD 接入，复用功能（`XUART0_RXD` 串口接收）一旦开始收数据，CPU 时钟源就会被误切换。
+`CLK_PLL_OSC` 用于选择 A45 CPU 的时钟源。该信号**必须**先经 `strap_latch` 冻结后再驱动时钟切换单元；若直接从 PAD 接入，复用功能（`XUART0_RXD` 串口接收）一旦开始收数据，CPU 时钟源就会被误切换。
 
 ```verilog
+dft_mode_ctrl U_DFT_MODE_CTRL (
+        .SRC_CLK        (osc_clk            ),      // 必须用 OSC, 不能用 PLL
+        .RSTJ           (rstj_sync          ),
+        .TEST_STRAP_IN  (XGPIO_5_IN         ),      // PINPAD in 端
+        .FUNC_STRAP_IN  (XUART0_TXD_IN      ),      // PINPAD in 端
+        .TEST_MODE      (test_mode          ),
+        .FUNC_MODE      (func_mode          )
+        );
+
 strap_latch U_STRAP_LATCH (
-        .test_mode  (test_mode      ),
-        .test_se    (test_se        ),
-        .clk        (osc_clk        ),      // 必须用 OSC, 不能用 PLL
-        .por_rst_n  (por_rst_n_sync ),
-        .strap_pin  (strap_pin[7:0] ),
-        .strap_cfg  (strap_cfg[7:0] ),
-        .strap_lock (strap_lock     )
+        .SRC_CLK        (osc_clk            ),
+        .RSTJ           (rstj_sync          ),
+        .POR_N          (por_n              ),
+        .STRAP_IN       (strap_in[7:0]      ),
+        .STRAP_CFG      (strap_cfg[7:0]     )
         );
 
 clk_switch_2to1 U_A45_CLK_SW (
-        .test_mode  (test_mode      ),
-        .test_se    (test_se        ),
-        .rst_n      (por_rst_n_sync ),
-        .clka       (osc_clk        ),
-        .clkb       (pll_clk        ),
-        .select     (~strap_cfg[0]  ),      // strap_cfg[0] = 1 -> OSC (clka)
-        .sel_clk    (osc_clk        ),
-        .clk_o      (a45_clk        )
+        .test_mode      (test_mode          ),
+        .test_se        (test_se            ),
+        .rst_n          (rstj_sync          ),
+        .clka           (osc_clk            ),
+        .clkb           (pll_clk            ),
+        .select         (~strap_cfg[0]      ),      // strap_cfg[0] = 1 -> OSC (clka)
+        .sel_clk        (osc_clk            ),
+        .clk_o          (a45_clk            )
         );
 ```
 
@@ -393,24 +451,26 @@ clk_switch_2to1 U_A45_CLK_SW (
 
 **时序参数推导**（对应 2.3 节表 2-3）：
 
-| 文档参数 | RTL 依据 | 推导值 | 文档取值 |
-|---|---|---|---|
-| T_setup | 同步器两级 + 建立余量 | ≥ 3 × T_osc | 1 μs |
-| T_hold | 复位释放 → cap_en → 同步器延迟 | ≥ (CAP_DLY + 2) × T_osc = 6 × T_osc | 1 μs |
+| 文档参数 | RTL 依据 | 推导值 | @24 MHz | 文档取值 |
+|---|---|---|---|---|
+| T_setup | STRAP 须在 `RSTJ` 释放前最后一个 `SRC_CLK` 上升沿之前稳定 | ≥ 1 × T_src + t_su(FF) | ≈ 42 ns | 1 μs |
+| T_hold | `RSTJ` 释放沿与 `SRC_CLK` 沿的相对位置不确定，须覆盖一个完整时钟周期 | ≥ 1 × T_src | ≈ 42 ns | 1 μs |
+| T_rstlow | 采样窗口内至少须发生一次采样 | ≥ 2 × T_src | ≈ 84 ns | 1 μs |
 
-以 OSC = 24 MHz 计，T_hold 理论最小值为 250 ns。对外文档统一取 1 μs，留 4 倍工程裕量，客户无需了解内部时钟频率。
+对外文档统一取 1 μs，留 20 倍以上工程裕量，客户无需了解内部时钟频率。
 
-### A.6 验证用例清单
+另需注意：`RSTJ` 在本结构中作为触发器的数据使能使用，其释放沿若落在使能端的建立保持窗口内会引发亚稳态。因此 `RSTJ` 应取自"异步置位 / 同步释放"复位同步器的输出，与 `SRC_CLK` 同步。
+
+### A.8 验证用例清单
 
 | 编号 | 用例 | 检查点 |
 |---|---|---|
-| 1 | 遍历全部 STRAP 组合 | `strap_cfg` 与期望值一致 |
-| 2 | `strap_lock` 拉高后翻转所有 `strap_pin` | `strap_cfg` 保持不变（断言 `a_strap_frozen`） |
-| 3 | PLL 不起振（`pll_clk` 静默） | 芯片仍以 `STRAP_DEF` 缺省值从 NOR Flash 启动 |
-| 4 | 采样窗口内使 `strap_pin` 在时钟沿附近跳变 | 同步器不产生 X 传播 |
-| 5 | 无时钟、无复位条件下拉高 `test_mode_pin` | `scan_mode` 立即建立（DFT 直通路径关键验证点） |
-
----
+| 1 | 遍历全部 STRAP 组合 | `STRAP_CFG`、`TEST_MODE`、`FUNC_MODE` 与期望值一致 |
+| 2 | `RSTJ` 释放后翻转所有 STRAP 引脚 | 配置保持不变（断言 `a_strap_frozen`） |
+| 3 | `RSTJ` 低电平期间 `SRC_CLK` 不翻转 | 确认采样不发生，并核对此时芯片行为是否可接受 |
+| 4 | PLL 不起振（`pll_clk` 静默） | 芯片仍以 `STRAP_DEF` 缺省值从 NOR Flash 启动 |
+| 5 | `RSTJ` 释放沿在 `SRC_CLK` 沿附近扫动 | 无 X 传播，`TEST_MODE` 无毛刺 |
+| 6 | 扫描链移位期间监视 `TEST_MODE` | 全程保持稳定，且该配置寄存器未被替换为 scan flop |
 
 ## 待确认事项
 
