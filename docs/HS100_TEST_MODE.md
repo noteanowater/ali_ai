@@ -337,7 +337,7 @@ assign STRAP_PIN_CLEAR = trig_posedge;
 
 ## 待确认事项
 
-1. **三个子模式与 STRAP 的映射关系不完整。** 当前 `FUNC_MODE = 0` 对应 AIP/MBIST test mode，`TEST_MODE = 1` 对应 DFT test mode，但 SCAN_MODE 的选中条件、以及 AIP_ES_MODE 与 MBIST_MODE 的区分方式尚未给出。附录 A.4 中的译码表为暂定实现，需确认后更新。
+1. **三个子模式与 STRAP 的映射关系不完整。** 当前 `FUNC_MODE = 0` 对应 AIP/MBIST test mode，`TEST_MODE = 1` 对应 DFT test mode，但 SCAN_MODE 的选中条件、以及 AIP_ES_MODE 与 MBIST_MODE 的区分方式尚未给出。该译码逻辑目前不在本文档所述的四个模块内，需确认其所在模块并补充真值表。
 2. **WORK_MODE[2:0] 的 8 种编码含义缺失**（表 2-2 待补充）。
 3. **CLK_PLL_OSC 的缺省值请复核**：当前 PAD 为内部上拉，缺省 H = "A45 CPU clock use OSC"，即芯片缺省从 OSC 启动而非 PLL。若为预期行为（上电先跑 OSC，由软件后续切到 PLL），建议在文档中明确说明。
 4. **BOOT_* 四根启动配置脚的优先级**：四者同时置 1 时的仲裁顺序需补充启动源优先级表。
