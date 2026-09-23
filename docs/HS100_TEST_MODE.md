@@ -46,7 +46,9 @@ HS100 不提供软件方式进入测试模式，测试模式只能通过 STRAP P
 
 `TEST_MODE` 扇出至全芯片每一个 scan mux，扇出量级与时钟、复位相当，必须按时钟网络处理才能保证全片低偏斜。
 
-**复位释放后，功能类 STRAP 的生效值还可由软件通过 APB 寄存器重新配置**，用于免改板调试、启动源切换等场景，详见第 3 章。`TEST_MODE` 不在可重配置之列——其配置通路在硬件上即不存在，软件无论如何操作都无法置位该信号。由于进入任何一种测试子模式都以 `TEST_MODE = 1` 为前提，这一条即可保证运行中的软件无法将芯片切入测试模式。具体实现见附录 A。
+**复位释放后，功能类 STRAP 的生效值还可由软件通过 APB 寄存器重新配置**，用于免改板调试、启动源切换等场景，详见第 3 章。`TEST_MODE` 不在可重配置之列——其配置通路在硬件上即不存在，软件无论如何操作都无法置位该信号，因此软件无法使芯片进入 SCAN_MODE。但 `FUNC_MODE` 属于功能类 STRAP，软件可以改写，而 ES_MODE 的进入条件并不要求 `TEST_MODE = 1`，相关分析见 4.5 节。具体实现见附录 A。
+
+STRAP 采样所使用的复位为 `PAD_RSTJ & AON_POR`，即外部复位引脚与片内 AON 域上电复位的逻辑与，两者任一有效时采样窗口即打开。
 
 ---
 
@@ -184,6 +186,114 @@ STRAP PIN 具有以下典型特征：
 7. **地址约束**：`PADDR` 须为已去除基地址的偏移量。寄存器内部按全 32 位地址比较，高位不为 0 时不会命中任何寄存器。
 8. **TEST_MODE 约束**：`MODE_REG[0]` 与 `TRIG[5]` 均为无效位，写入不产生任何效果，亦不会返回错误。软件如需确认测试模式状态，应读取 `MODE_RPT[0]`。
 9. **配置时机约束**：启动源类配置（`BOOT_*`）的重配置须在 Boot ROM 完成取指之前或之后明确的时点进行，运行中途切换将导致取指路径变更。具体可切换时点由软件架构决定，本文不作规定。
+
+---
+
+## 4. 测试模式的进入方法
+
+### 4.1 模式选择真值表
+
+芯片所处模式由 `TEST_MODE`、`FUNC_MODE` 两个 STRAP 决定；进入 DFT 模式后，再由 `DFT_SEL_CPU` / `DFT_SEL_DDR` 选择扫描链，进入 ES_MODE 后由 `WORK_MODE[2:0]` 选择 MBIST 或 AIP。
+
+| 模式 | TEST_MODE<br>XGPIO_5 | FUNC_MODE<br>XUART0_TXD | DFT_SEL_CPU<br>XUART1_TXD | DFT_SEL_DDR<br>XUART1_RXD | WORK_MODE[2:0]<br>XIIC1_SCL / XIIC1_SDA / XIIC0_SCL |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Function Mode（正常功能模式） | 0 | 1 | x | x | x |
+| **DFT Mode** | **1** | **x** | 见下 | 见下 | x |
+| 　— DFT TOP（顶层扫描链） | 1 | x | 0 | 0 | x |
+| 　— DFT CPU（CPU 扫描链） | 1 | x | 1 | 0 | x |
+| 　— DFT DDR（DDR 扫描链） | 1 | x | 0 | 1 | x |
+| 　— DFT CPU（两者同时有效） | 1 | x | 1 | 1 | x |
+| **ES_MODE（MBIST / AIP）** | **0** | **0** | x | x | 见下 |
+| 　— MBIST | 0 | 0 | x | x | **待确认** |
+| 　— AIP test（ADC） | 0 | 0 | x | x | **待确认** |
+
+表中 `x` 表示该位不参与本模式的判定。
+
+两点需要特别注意：
+
+1. **进入 DFT Mode 只取决于 `TEST_MODE = 1`，与 `FUNC_MODE` 无关。**
+2. **进入 ES_MODE 不需要 `TEST_MODE = 1`，其条件是 `TEST_MODE = 0` 且 `FUNC_MODE = 0`。** 这一点与直觉相反，是 4.5 节安全性分析的出发点。
+
+`DFT_SEL_CPU` 与 `DFT_SEL_DDR` 同时为 1 时，管脚分配按 CPU 扫描链处理；两者同时为 0 时按顶层 DFT 处理。
+
+### 4.2 进入 SCAN_MODE 的操作步骤
+
+1. **准备引脚电平。** 将 `TEST_MODE`（`XGPIO_5`）驱动为高。该 PAD 类型为 `PBCD8RNC`，内部下拉、缺省为低，因此必须由 ATE 或外部上拉电阻主动驱动。
+2. **选择扫描链。** 按 4.1 节真值表设置 `DFT_SEL_CPU`（`XUART1_TXD`）与 `DFT_SEL_DDR`（`XUART1_RXD`）：顶层链两者置 0，CPU 链置 `1/0`，DDR 链置 `0/1`。
+3. **保持复位。** 将 `PAD_RSTJ` 保持为低，等待外部晶振起振并稳定。复位期间上述引脚电平须保持稳定，时序要求见表 2-3。
+4. **释放复位。** `PAD_RSTJ` 释放的瞬间，`TEST_MODE` 等配置被冻结，芯片进入 DFT 模式，扫描相关引脚由 pinmux 切换为 DFT 功能。此后引脚电平的变化不再改变模式。
+5. **ATE 接管测试时序。** 由 ATE 驱动 `TEST_CLK`、`TEST_SE`、`DFT_RESET`，并按所选测试类型设置 `SCAN_COMP_MODE`、`SCAN_ATSPEED_MODE`、`DFT_OCC_BYPASS`、`DFT_OCC_RESET`。
+6. **执行扫描测试。** 通过 `TEST_SI[16:0]` 移入向量、`TEST_SO[16:0]` 移出响应。
+
+若测试 DFT CPU 链且需要 PLL 输出特定频率，还须按 4.3 节设置 `CPU_SPEED_SEL[1:0]`。
+
+### 4.3 DFT 控制引脚
+
+| DFT 信号 | 复用 Pin 名 | 方向 | 功能说明 |
+|---|---|:---:|---|
+| TEST_MODE | XGPIO_5 | I | 置 1 进入 DFT 模式 |
+| TEST_CLK | XSPI0_CLK | I | 扫描测试时钟，由 ATE 驱动 |
+| TEST_SE | XSPI0_CS | I | 扫描使能，区分移位（Shift）与捕获（Capture） |
+| DFT_RESET | XSPI0_CS1 | I | DFT 专用复位，绕开功能复位路径 |
+| DFT_SEL_CPU | XUART1_TXD | I | 选择 CPU 测试链的 SI/SO 管脚分配。与 `DFT_SEL_DDR` 同时有效时按 CPU 链处理；两者同时为 0 时按顶层 DFT 处理 |
+| DFT_SEL_DDR | XUART1_RXD | I | 选择 DDR 测试链的 SI/SO 管脚分配，仲裁规则同上 |
+| SCAN_COMP_MODE | XWKUP_GPIO_3 | I | 扫描压缩模式选择 |
+| SCAN_ATSPEED_MODE | XWKUP_GPIO_4 | I | At-Speed（时延故障）测试模式选择 |
+| DFT_OCC_BYPASS | XSPI0_DATA_0 | I | 片上时钟控制器（OCC）旁路 |
+| DFT_OCC_RESET | XSPI0_DATA_1 | I | 片上时钟控制器复位 |
+| CPU_SPEED_SEL[0] | XWKUP_GPIO_0 | I | PLL 模式下 A45 CPU 的 PLL 输出频率选择，编码见下表 |
+| CPU_SPEED_SEL[1] | XWKUP_GPIO_1 | I | 同上 |
+
+**CPU_SPEED_SEL[1:0] 编码**
+
+| CPU_SPEED_SEL[1:0] | A45 CPU PLL 输出频率 |
+|:---:|---|
+| 00 | 500 MHz |
+| 01 | 550 MHz |
+| 10 | 600 MHz |
+| 11 | 600 MHz |
+
+### 4.4 扫描链数据引脚
+
+扫描链共 17 位输入、17 位输出，按位序排列如下。
+
+| 位序 | TEST_SI（输入） | TEST_SO（输出） |
+|:---:|---|---|
+| 0 | XTG0 | XTR0 |
+| 1 | XTG1 | XTR1 |
+| 2 | XTG2 | XTR2 |
+| 3 | XTG3 | XTR3 |
+| 4 | XTG4 | XTR4 |
+| 5 | XTG5 | XTR5 |
+| 6 | XTG6 | XTR6 |
+| 7 | XTG7 | XTR7 |
+| 8 | XAFE_SDI | XAFE_SDI2 |
+| 9 | XAFE_SEN | XAFE_SCK |
+| 10 | XLSYNC3 | XPSYNC0 |
+| 11 | XLSYNC2 | XPSYNC3 |
+| 12 | XLSYNC1 | XPSYNC2 |
+| 13 | XLSYNC0 | XVDHSC1 |
+| 14 | XPSYNC1 | XVDHSC0 |
+| 15 | XPWM14 | XPWM16 |
+| 16 | XPWM15 | XPWM17 |
+
+注意 `TEST_SI[13:10]` 对应的 `XLSYNC0`～`XLSYNC3` 为降序映射（`SI[10]`→`XLSYNC3`，`SI[13]`→`XLSYNC0`），`TEST_SO[12:10]` 对应的 `XPSYNC` 组亦非顺序映射，编写 ATE 管脚映射文件时请以本表为准，不要按引脚编号推断。
+
+### 4.5 安全性说明
+
+`TEST_MODE` 在硬件上没有软件写入通路（见附录 A.1），因此**运行中的软件无法使芯片进入 SCAN_MODE**，扫描链不会被软件激活，这是 HS100 的一项明确安全设计。
+
+但 ES_MODE 的情形不同。按 4.1 节真值表，其进入条件为 `TEST_MODE = 0` 且 `FUNC_MODE = 0`——不涉及 `TEST_MODE = 1`。而 `FUNC_MODE` 属于功能类 STRAP，软件可通过 `TRIG[6]` 改写（见 3.3 节）。经 RTL 仿真确认：在引脚 `FUNC_MODE` 缺省为 1（正常功能模式）的板卡上，软件仅需一次 APB 写即可将其改为 0，从而满足 ES_MODE 的进入条件。
+
+这一路径还存在误触发风险：`MODE_REG` 的复位值为全 0，若软件遗漏 3.4 节第 1 步而直接写 `TRIG[6]`，`FUNC_MODE` 同样会被置为 0。
+
+处理建议，按代价由低到高：
+
+1. **RTL 修改**：将 `FUNC_MODE` 移出软件可重配置范围，处理方式与 `TEST_MODE` 一致（`PAD_STRAP` 中已有被注释屏蔽的 `FUNC_MODE_CTRL` 例化，可据此恢复）；
+2. **RTL 修改**：为 ES_MODE 的译码补充一个软件不可改写的限定条件；
+3. **软件规避**：在安全启动流程中锁定该寄存器区间的访问权限，并明确禁止软件写 `TRIG[6]`。
+
+本条需在交付客户前明确结论，并据此调整 1.2 节与本节的表述。
 
 ---
 
@@ -341,12 +451,13 @@ assign STRAP_PIN_CLEAR = trig_posedge;
 
 ## 待确认事项
 
-1. **三个子模式与 STRAP 的映射关系不完整。** 当前 `FUNC_MODE = 0` 对应 AIP/MBIST test mode，`TEST_MODE = 1` 对应 DFT test mode，但 SCAN_MODE 的选中条件、以及 AIP_ES_MODE 与 MBIST_MODE 的区分方式尚未给出。该译码逻辑目前不在本文档所述的四个模块内，需确认其所在模块并补充真值表。
-2. **WORK_MODE[2:0] 的 8 种编码含义缺失**（表 2-2 待补充）。
-3. **CLK_PLL_OSC 的缺省值请复核**：当前 PAD 为内部上拉，缺省 H = "A45 CPU clock use OSC"，即芯片缺省从 OSC 启动而非 PLL。若为预期行为（上电先跑 OSC，由软件后续切到 PLL），建议在文档中明确说明。
-4. **BOOT_* 四根启动配置脚的优先级**：四者同时置 1 时的仲裁顺序需补充启动源优先级表。
-5. **PAD 内部上下拉阻值典型值**需从 Datasheet 取值填入 2.3 节。
-6. **命名不一致**：引脚表与 RTL 对同一信号的命名不统一——引脚表称 `TEST_MODE`（复用 `XGPIO_5`），而 RTL 中顶层端口为 `SCAN_MODE_IN`、模块内部为 `DFT_MODE`。交付客户前需统一，建议以引脚表的 `TEST_MODE` 为准。
-7. **`FUNC_MODE` 的可重配置性请确认**：`FUNC_MODE` 目前走功能类通路，软件可通过 `TRIG[6]` 改写。按 2.2 节定义 `FUNC_MODE = 0` 即 AIP/MBIST test mode，因此该位是否应与 `TEST_MODE` 同样禁止软件写入，取决于待确认项 1 的模式译码真值表。RTL 中 `FUNC_MODE_CTRL` 的例化已被注释屏蔽，需确认这是最终决策还是遗留代码。
-8. **`PCLK` 与 `STRAP_CLK` 的频率关系需在 Datasheet 中明确**，以支撑 3.5 节第 3 条约束。
-9. **采样时钟源需确认**：`SRC_CLK` / `STRAP_CLK` 是取自外部晶振，还是片内 RC 环振？二者的稳定时间量级相差很大（晶振通常为数 ms，环振为数 μs），直接决定表 2-3 中 `T_rstlow` 的取值以及给客户的复位时长建议。本文当前按外部晶振表述。
+1. **MBIST 与 AIP 的 `WORK_MODE[2:0]` 编码待确认。** 模式选择真值表已补入 4.1 节，但原始矩阵中 MBIST 行与 AIP 行的 `WORK_MODE` 取值列对齐存在歧义，未能可靠读出。请提供这两种 ES 子模式各自的 `WORK_MODE[2:0]` 具体编码，以填入 4.1 节表格中标注「待确认」的两格。
+2. **模式译码逻辑的所在模块待确认**：4.1 节真值表对应的译码电路不在本文档所述的四个 STRAP 模块内，需确认其实现位置，以便在附录 A 中补充说明。
+3. **WORK_MODE[2:0] 的完整编码含义缺失**（表 2-2 待补充）。除 MBIST / AIP 的选择外，其余取值是否另有定义？
+4. **CLK_PLL_OSC 的缺省值请复核**：当前 PAD 为内部上拉，缺省 H = "A45 CPU clock use OSC"，即芯片缺省从 OSC 启动而非 PLL。若为预期行为（上电先跑 OSC，由软件后续切到 PLL），建议在文档中明确说明。
+5. **BOOT_* 四根启动配置脚的优先级**：四者同时置 1 时的仲裁顺序需补充启动源优先级表。
+6. **PAD 内部上下拉阻值典型值**需从 Datasheet 取值填入 2.3 节。
+7. **命名不一致**：引脚表与 RTL 对同一信号的命名不统一——引脚表称 `TEST_MODE`（复用 `XGPIO_5`），而 RTL 中顶层端口为 `SCAN_MODE_IN`、模块内部为 `DFT_MODE`。交付客户前需统一，建议以引脚表的 `TEST_MODE` 为准。
+8. **【需决策】`FUNC_MODE` 软件可写导致 ES_MODE 可被软件进入。** 该问题已由 4.1 节真值表确认成立，并经 RTL 仿真复现，详见 4.5 节。请在三种处理方式中选定一种。`PAD_STRAP` 中 `FUNC_MODE_CTRL` 的例化已被注释屏蔽，需确认这是最终决策还是遗留代码。
+9. **`PCLK` 与 `STRAP_CLK` 的频率关系需在 Datasheet 中明确**，以支撑 3.5 节第 3 条约束。
+10. **采样时钟源需确认**：`SRC_CLK` / `STRAP_CLK` 是取自外部晶振，还是片内 RC 环振？二者的稳定时间量级相差很大（晶振通常为数 ms，环振为数 μs），直接决定表 2-3 中 `T_rstlow` 的取值以及给客户的复位时长建议。本文当前按外部晶振表述。

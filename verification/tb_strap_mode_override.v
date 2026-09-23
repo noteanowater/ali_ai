@@ -74,6 +74,15 @@ initial begin
     else                        $display("  [FAIL] 软件置位了 TEST_MODE !");
     apb_read(32'h0C, rd);
     $display("  TRIG = 0x%0h  (bit5 应已自清)", rd);
+
+    // ---- ES_MODE 进入条件: TEST_MODE=0 且 FUNC_MODE=0 ----
+    $display("");
+    $display("  --- ES_MODE(MBIST/AIP) 进入条件检查: TEST_MODE=0 && FUNC_MODE=0 ---");
+    $display("  当前 TEST_MODE=%b  FUNC_MODE=%b", STR_SCAN_MODE, FUNC_MODE);
+    if (STR_SCAN_MODE === 1'b0 && FUNC_MODE === 1'b0)
+        $display("  [SECURITY] 条件已满足 -- 软件仅凭一次 APB 写即可把芯片置入 ES_MODE");
+    else
+        $display("  [OK] 条件不满足, 软件无法进入 ES_MODE");
     $display("");
     $finish;
 end
