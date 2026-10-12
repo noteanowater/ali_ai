@@ -14,6 +14,10 @@
 // XADC_CH0_CODE is the ideal N-bit quantization of the input (reference only,
 // for comparing against the ADC output).
 //
+// XADC_CH0_DIG is a 1-bit view of the sine for digital-only ADC models whose
+// analog input pin is a plain wire (e.g. SMIC S40NLLAD2G_8MUX CH[7:0]):
+//   XADC_CH0_DIG = (v >= DIG_TH_R*VDDA)  -> 11.2KHz, 50% square wave
+//
 // All clock edges are computed from absolute time (n*T), so there is no
 // accumulated rounding drift; ADC_CLK and ADC_SOC are coherent (11:1).
 //==============================================================================
@@ -22,6 +26,7 @@
 module adc_stim_model (
     XADC_CH0,
     XADC_CH0_CODE,
+    XADC_CH0_DIG,
     XTR0,
     XTR1
 );
@@ -53,10 +58,15 @@ parameter real    CLK_DELAY   = 0.0;      // first rising edge, ns
 parameter real    SOC_FREQ    = 1.0e6;    // Hz
 parameter real    SOC_PPM     = 0.0;
 parameter real    SOC_DUTY    = 50.0;     // %
-parameter real    SOC_DELAY   = 0.0;      // first rising edge, ns
+parameter real    SOC_DELAY   = 20.0;     // first rising edge, ns
+                                          // 20ns keeps SOC edges away from
+                                          // ADC_CLK edges (setup/hold safe)
 
 // ideal reference code width
 parameter integer CODE_BITS   = 12;
+
+// 1-bit output threshold, ratio of VDDA (default = sine mid level)
+parameter real    DIG_TH_R    = 0.45;
 
 localparam real   PI          = 3.14159265358979323846;
 
@@ -65,11 +75,13 @@ localparam real   PI          = 3.14159265358979323846;
 //------------------------------------------------------------------------------
 output [63:0]           XADC_CH0;
 output [CODE_BITS-1:0]  XADC_CH0_CODE;
+output                  XADC_CH0_DIG;
 output                  XTR0;
 output                  XTR1;
 
 reg    [63:0]           XADC_CH0;
 reg    [CODE_BITS-1:0]  XADC_CH0_CODE;
+reg                     XADC_CH0_DIG;
 reg                     XTR0;
 reg                     XTR1;
 
@@ -138,6 +150,7 @@ integer code;
 initial begin
     XADC_CH0      = 64'd0;
     XADC_CH0_CODE = {CODE_BITS{1'b0}};
+    XADC_CH0_DIG  = 1'b0;
     #0;
     forever begin
         t_s = $realtime * 1.0e-9;
@@ -158,6 +171,7 @@ initial begin
         if (code > (1 << CODE_BITS) - 1) code = (1 << CODE_BITS) - 1;
         if (code < 0)                    code = 0;
         XADC_CH0_CODE = code;
+        XADC_CH0_DIG  = (v >= DIG_TH_R * VDDA);
 
         #(SIN_STEP);
     end
