@@ -9,37 +9,43 @@ endmodule
 module tb_pll_sys_dfs_ctrl;
 reg clk_ref = 0, rst_n = 0;
 reg pll_int_en = 0, pll_int_clr = 0;
+integer err = 0, edges_during_gate = 0;
 reg [1:0]  sel = 0;
 reg [31:0] cfg = 0;
 reg wfi0 = 0, wfi1 = 0;
 reg pll_clk = 0, pll_lock = 0;
 wire [1:0] sel_o; wire [31:0] cfg_o;
-wire pll_rst, clk_g, busy, done, tmo, irq;
+wire pll_pd, clk_g, busy, done, tmo, irq;
 
 always #20.833 clk_ref = ~clk_ref;          // 24MHz
 
-// PLL 模型: 配置变化后失锁, 2us 后以新频率锁定
+// PLL 模型: pd=1 时停振失锁; pd 释放后 2us 以 divider 对应频率锁定
 real half = 5.0;                             // 100MHz
-always #(half) pll_clk = ~pll_clk;
+always #(half) if (!pll_pd) pll_clk = ~pll_clk;
+realtime pd_rise, cfg_t;
+always @(posedge pll_pd) begin pll_lock = 0; pd_rise = $realtime; end
 always @(cfg_o) begin
-    pll_lock = 0;
+    cfg_t = $realtime;
+    if (rst_n && !pll_pd) begin err = err + 1; $display("ERR: divider changed while pd=0"); end
+end
+always @(negedge pll_pd) begin
+    if (rst_n && $realtime - cfg_t < 1000.0) begin err = err + 1; $display("ERR: pd released < 1us after divider set"); end
     #2000;
     half = 1000.0 / (cfg_o[15:0]) / 2.0;     // cfg_o[15:0] = MHz
-    pll_lock = 1;
+    if (!pll_pd) pll_lock = 1;
 end
 
-pll_sys_dfs_ctrl #(.CFG_W(32), .PLL_RST_CYC(4), .LOCK_TIMEOUT_CYC(1000)) dut (
+pll_sys_dfs_ctrl #(.CFG_W(32), .PLL_PD_CYC(32), .LOCK_TIMEOUT_CYC(1000)) dut (
     .clk_ref(clk_ref), .rst_n(rst_n), .test_mode(1'b0), .test_se(1'b0),
     .pll_sys_sel_i(sel), .pll_cfg_i(cfg),
     .pll_int_en(pll_int_en), .pll_int_clr(pll_int_clr),
     .core_wfi_mode_0(wfi0), .core_wfi_mode_1(wfi1),
     .pll_clk(pll_clk), .pll_lock(pll_lock),
-    .pll_sys_sel_o(sel_o), .pll_cfg_o(cfg_o), .pll_rst(pll_rst), .pll_clk_gated(clk_g),
+    .pll_sys_sel_o(sel_o), .pll_cfg_o(cfg_o), .pll_pd(pll_pd), .pll_clk_gated(clk_g),
     .pll_dfs_busy(busy), .pll_dfs_done(done), .pll_lock_timeout(tmo), .pll_sys_lock_int(irq));
 
 // 检查: gate 期间不得有时钟 / 配置变化必须发生在 gate 期间
-integer err = 0, edges_during_gate = 0;
-always @(posedge clk_g) if (dut.state >= 3 && dut.state <= 4) edges_during_gate = edges_during_gate + 1;
+always @(posedge clk_g) if (dut.state >= 3 && dut.state <= 5) edges_during_gate = edges_during_gate + 1;
 always @(cfg_o) if (rst_n && dut.gate_en_pll) begin err = err + 1; $display("ERR: cfg changed while clk on"); end
 always @(posedge clk_g) if (!dut.gate_en_pll) ; // ICG latch 保证无毛刺
 

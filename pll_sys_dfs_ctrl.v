@@ -8,7 +8,11 @@
 //         PLL_INT_EN 上升沿同时作为本次调频的启动 (arm) 信号; 未置位时 core 进入 WFI 不会触发调频
 //   HW 3. 等待 core_wfi_mode_0 / core_wfi_mode_1 均为 1 (并保持 WFI_STABLE_CYC 个周期)
 //   HW 4. Gate PLL CLK (pll_clk 域内 ICG 关断, 握手确认已关断)
-//   HW 5. 将 PLL_SYS_SEL / PLL_CFG 更新到 PLL, 可选输出 pll_rst 脉冲, 等待 PLL LOCK
+//   HW 5. PLL 调频 (按 PLL 手册 STARTING THE PLL 流程):
+//         5.1 assert pd=1
+//         5.2 设置 divider 控制位 (PLL_CFG) 及 PLL_SYS_SEL
+//         5.3 pd 保持 >= 1us 后 release pd=0 (PLL_PD_CYC 个 clk_ref 周期)
+//         5.4 等待 PLL LOCK
 //   HW 6. 开启 PLL_SYS_Gate (握手确认已打开)
 //   HW 7. 发出 PLL_SYS_LOCK_INT (电平中断, 需 SW 通过 pll_int_clr 清除), 唤醒 CPU
 //
@@ -32,8 +36,8 @@ module pll_sys_dfs_ctrl #(
     parameter CFG_W            = 32,     // PLL_CFG 位宽
     parameter CNT_W            = 16,     // 计数器位宽
     parameter WFI_STABLE_CYC   = 4,      // WFI 需连续保持的 clk_ref 周期数 (>=1)
-    parameter PLL_RST_CYC      = 0,      // 更新配置后 pll_rst 脉宽 (0: 不输出复位)
-    parameter PLL_SETTLE_CYC   = 16,     // 更新配置后, 开始检测 LOCK 前的等待周期 (屏蔽旧 LOCK)
+    parameter PLL_PD_CYC       = 32,     // 设置 divider 后 pd 保持周期数, 须 >= 1us/T(clk_ref) (24MHz: >=24)
+    parameter PLL_SETTLE_CYC   = 16,     // release pd 后, 开始检测 LOCK 前的等待周期
     parameter LOCK_STABLE_CYC  = 8,      // LOCK 需连续保持的周期数 (>=1)
     parameter LOCK_TIMEOUT_CYC = 0       // 等 LOCK 超时周期数 (0: 不超时)
 )(
@@ -56,8 +60,8 @@ module pll_sys_dfs_ctrl #(
     input                   pll_clk,           // PLL 输出时钟
     input                   pll_lock,          // PLL LOCK
     output reg  [1:0]       pll_sys_sel_o,     // 送 PLL / 时钟 mux 的 SEL
-    output reg  [CFG_W-1:0] pll_cfg_o,         // 送 PLL 的配置
-    output reg              pll_rst,           // PLL 复位 (高有效, 可选)
+    output reg  [CFG_W-1:0] pll_cfg_o,         // 送 PLL 的 divider 控制位
+    output reg              pll_pd,            // PLL power down (高有效)
     output                  pll_clk_gated,     // gate 后的 PLL_SYS 时钟
 
     // ---------------- 状态 / 中断 ----------------
@@ -73,10 +77,11 @@ module pll_sys_dfs_ctrl #(
 localparam ST_IDLE      = 3'd0;
 localparam ST_WAIT_WFI  = 3'd1;   // step 3
 localparam ST_GATE      = 3'd2;   // step 4
-localparam ST_APPLY     = 3'd3;   // step 5: 更新配置 / PLL 复位
-localparam ST_WAIT_LOCK = 3'd4;   // step 5: 等 LOCK
-localparam ST_UNGATE    = 3'd5;   // step 6
-localparam ST_DONE      = 3'd6;   // step 7
+localparam ST_PD        = 3'd3;   // step 5.1: pd=1
+localparam ST_APPLY     = 3'd4;   // step 5.2/5.3: 设置 divider, pd 保持 >= 1us
+localparam ST_WAIT_LOCK = 3'd5;   // step 5.4: pd=0, 等 LOCK
+localparam ST_UNGATE    = 3'd6;   // step 6
+localparam ST_DONE      = 3'd7;   // step 7
 
 reg  [2:0]       state, state_nxt;
 reg  [CNT_W-1:0] cnt;
@@ -133,7 +138,8 @@ always @(*) begin
         ST_IDLE     : if (start)                          state_nxt = ST_WAIT_WFI;
         ST_WAIT_WFI : if (!int_en_s)                      state_nxt = ST_IDLE;      // SW 取消
                       else if (wfi_all && cnt_hit)        state_nxt = ST_GATE;
-        ST_GATE     : if (!gate_ack_s)                    state_nxt = ST_APPLY;
+        ST_GATE     : if (!gate_ack_s)                    state_nxt = ST_PD;
+        ST_PD       :                                     state_nxt = ST_APPLY;
         ST_APPLY    : if (cnt_hit)                        state_nxt = ST_WAIT_LOCK;
         ST_WAIT_LOCK: if ((lock_s && cnt_hit) || tmo_hit) state_nxt = ST_UNGATE;
         ST_UNGATE   : if (gate_ack_s)                     state_nxt = ST_DONE;
@@ -155,7 +161,7 @@ always @(posedge clk_ref or negedge rst_n) begin
             ST_IDLE     : cnt <= WFI_STABLE_CYC - 1;
             ST_WAIT_WFI : if (!wfi_all)               cnt <= WFI_STABLE_CYC - 1;   // WFI 需连续保持
                           else if (!cnt_hit)          cnt <= cnt - 1'b1;
-            ST_GATE     : cnt <= (PLL_RST_CYC != 0) ? PLL_RST_CYC - 1 : 0;
+            ST_PD       : cnt <= PLL_PD_CYC - 1;
             ST_APPLY    : if (!cnt_hit)               cnt <= cnt - 1'b1;
                           else                        cnt <= PLL_SETTLE_CYC + LOCK_STABLE_CYC - 1;
             ST_WAIT_LOCK: if (cnt < LOCK_STABLE_CYC && !lock_s)
@@ -178,22 +184,22 @@ always @(posedge clk_ref or negedge rst_n)
     else if (state == ST_WAIT_WFI && state_nxt == ST_GATE) gate_en_req <= 1'b0;
     else if (state_nxt == ST_UNGATE)                   gate_en_req <= 1'b1;
 
-// PLL 配置输出: 在时钟已 gate 后 (进入 APPLY 时) 更新
+// PLL 配置输出: 时钟已 gate 且 pd=1 之后 (进入 APPLY 时) 更新
 always @(posedge clk_ref or negedge rst_n) begin
     if (!rst_n) begin
         pll_sys_sel_o <= 2'b0;
         pll_cfg_o     <= {CFG_W{1'b0}};
     end
-    else if (state == ST_GATE && state_nxt == ST_APPLY) begin
+    else if (state == ST_PD) begin
         pll_sys_sel_o <= pll_sys_sel_i;
         pll_cfg_o     <= pll_cfg_i;
     end
 end
 
-// PLL 复位脉冲 (PLL_RST_CYC 个 clk_ref 周期)
+// PLL pd: 进入 PD 时拉高, divider 设置后保持 PLL_PD_CYC 周期, 进入 WAIT_LOCK 时释放
 always @(posedge clk_ref or negedge rst_n)
-    if (!rst_n) pll_rst <= 1'b0;
-    else        pll_rst <= (PLL_RST_CYC != 0) && (state_nxt == ST_APPLY);
+    if (!rst_n) pll_pd <= 1'b0;
+    else        pll_pd <= (state_nxt == ST_PD) || (state_nxt == ST_APPLY);
 
 // 状态
 assign pll_dfs_busy = (state != ST_IDLE);
