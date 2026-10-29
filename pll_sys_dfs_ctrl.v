@@ -4,7 +4,8 @@
 //
 // 软件 / 硬件分工:
 //   SW 1. CPU 执行 boot 流程
-//   SW 2. 配置 SCU: PLL_SYS_SEL[1:0] / PLL_CFG, 然后置位 PLL_INI_EN, CPU 两个 core 执行 WFI
+//   SW 2. 配置 SCU: PLL_SYS_SEL[1:0] / PLL_CFG, 然后置位 PLL_INT_EN, CPU 两个 core 执行 WFI
+//         PLL_INT_EN 上升沿同时作为本次调频的启动 (arm) 信号; 未置位时 core 进入 WFI 不会触发调频
 //   HW 3. 等待 core_wfi_mode_0 / core_wfi_mode_1 均为 1 (并保持 WFI_STABLE_CYC 个周期)
 //   HW 4. Gate PLL CLK (pll_clk 域内 ICG 关断, 握手确认已关断)
 //   HW 5. 将 PLL_SYS_SEL / PLL_CFG 更新到 PLL, 可选输出 pll_rst 脉冲, 等待 PLL LOCK
@@ -19,8 +20,8 @@
 //   pll_clk : PLL 输出时钟, 本模块在 pll_clk 域内用 ICG 无毛刺地 gate, 输出 pll_clk_gated
 //
 // 跨时钟域说明:
-//   pll_ini_en / pll_int_en / pll_int_clr / core_wfi_mode_* / pll_lock 均做 2 级同步
-//   pll_sys_sel_i / pll_cfg_i 为准静态信号: SW 必须先写 SEL/CFG, 再写 PLL_INI_EN,
+//   pll_int_en / pll_int_clr / core_wfi_mode_* / pll_lock 均做 2 级同步
+//   pll_sys_sel_i / pll_cfg_i 为准静态信号: SW 必须先写 SEL/CFG, 再写 PLL_INT_EN,
 //   硬件在 PLL CLK 已 gate 之后才采样, 因此无需逐位同步
 //
 // 中断说明:
@@ -42,10 +43,9 @@ module pll_sys_dfs_ctrl #(
     input                   test_se,
 
     // ---------------- SCU ----------------
-    input                   pll_ini_en,        // PLL_INI_EN, 上升沿启动调频
     input       [1:0]       pll_sys_sel_i,     // PLL_SYS_SEL[1:0]
     input       [CFG_W-1:0] pll_cfg_i,         // PLL_CFG
-    input                   pll_int_en,        // 中断使能
+    input                   pll_int_en,        // PLL_INT_EN: 中断使能, 上升沿启动调频, 清 0 取消/清中断
     input                   pll_int_clr,       // 中断清除 (电平, 高有效)
 
     // ---------------- CPU ----------------
@@ -85,10 +85,9 @@ reg  [CNT_W-1:0] tmo_cnt;
 //------------------------------------------------------------------------------
 // 同步到 clk_ref 域
 //------------------------------------------------------------------------------
-wire ini_en_s, int_en_s, int_clr_s, wfi0_s, wfi1_s, lock_s, gate_ack_s;
-reg  ini_en_s_d;
+wire int_en_s, int_clr_s, wfi0_s, wfi1_s, lock_s, gate_ack_s;
+reg  int_en_s_d;
 
-pll_dfs_sync2 u_sync_ini   (.clk(clk_ref), .rst_n(rst_n), .d(pll_ini_en     ), .q(ini_en_s ));
 pll_dfs_sync2 u_sync_inten (.clk(clk_ref), .rst_n(rst_n), .d(pll_int_en     ), .q(int_en_s ));
 pll_dfs_sync2 u_sync_clr   (.clk(clk_ref), .rst_n(rst_n), .d(pll_int_clr    ), .q(int_clr_s));
 pll_dfs_sync2 u_sync_wfi0  (.clk(clk_ref), .rst_n(rst_n), .d(core_wfi_mode_0), .q(wfi0_s   ));
@@ -96,10 +95,10 @@ pll_dfs_sync2 u_sync_wfi1  (.clk(clk_ref), .rst_n(rst_n), .d(core_wfi_mode_1), .
 pll_dfs_sync2 u_sync_lock  (.clk(clk_ref), .rst_n(rst_n), .d(pll_lock       ), .q(lock_s   ));
 
 always @(posedge clk_ref or negedge rst_n)
-    if (!rst_n) ini_en_s_d <= 1'b0;
-    else        ini_en_s_d <= ini_en_s;
+    if (!rst_n) int_en_s_d <= 1'b0;
+    else        int_en_s_d <= int_en_s;
 
-wire start   = ini_en_s & ~ini_en_s_d;
+wire start   = int_en_s & ~int_en_s_d;
 wire wfi_all = wfi0_s & wfi1_s;
 
 //------------------------------------------------------------------------------
@@ -132,7 +131,7 @@ always @(*) begin
     state_nxt = state;
     case (state)
         ST_IDLE     : if (start)                          state_nxt = ST_WAIT_WFI;
-        ST_WAIT_WFI : if (!ini_en_s)                      state_nxt = ST_IDLE;      // SW 取消
+        ST_WAIT_WFI : if (!int_en_s)                      state_nxt = ST_IDLE;      // SW 取消
                       else if (wfi_all && cnt_hit)        state_nxt = ST_GATE;
         ST_GATE     : if (!gate_ack_s)                    state_nxt = ST_APPLY;
         ST_APPLY    : if (cnt_hit)                        state_nxt = ST_WAIT_LOCK;
@@ -216,7 +215,7 @@ always @(posedge clk_ref or negedge rst_n) begin
     end
 end
 
-// 中断: 时钟重新打开后置位, SW 清除; 置位优先
+// 中断: 时钟重新打开后置位; SW 写 pll_int_clr 或清 PLL_INT_EN 清除; 置位优先
 always @(posedge clk_ref or negedge rst_n)
     if (!rst_n)                             pll_sys_lock_int <= 1'b0;
     else if (state == ST_DONE && int_en_s)  pll_sys_lock_int <= 1'b1;

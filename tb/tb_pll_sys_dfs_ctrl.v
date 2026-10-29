@@ -8,7 +8,7 @@ endmodule
 
 module tb_pll_sys_dfs_ctrl;
 reg clk_ref = 0, rst_n = 0;
-reg pll_ini_en = 0, pll_int_en = 1, pll_int_clr = 0;
+reg pll_int_en = 0, pll_int_clr = 0;
 reg [1:0]  sel = 0;
 reg [31:0] cfg = 0;
 reg wfi0 = 0, wfi1 = 0;
@@ -30,7 +30,7 @@ end
 
 pll_sys_dfs_ctrl #(.CFG_W(32), .PLL_RST_CYC(4), .LOCK_TIMEOUT_CYC(1000)) dut (
     .clk_ref(clk_ref), .rst_n(rst_n), .test_mode(1'b0), .test_se(1'b0),
-    .pll_ini_en(pll_ini_en), .pll_sys_sel_i(sel), .pll_cfg_i(cfg),
+    .pll_sys_sel_i(sel), .pll_cfg_i(cfg),
     .pll_int_en(pll_int_en), .pll_int_clr(pll_int_clr),
     .core_wfi_mode_0(wfi0), .core_wfi_mode_1(wfi1),
     .pll_clk(pll_clk), .pll_lock(pll_lock),
@@ -52,10 +52,10 @@ end
 task dfs(input [1:0] s, input [31:0] mhz);
 begin
     @(posedge clk_ref); sel = s; cfg = mhz;   // step 2.1
-    pll_ini_en = 1;                           // step 2.2
+    pll_int_en = 1;                           // step 2.2
     #500 wfi0 = 1; #300 wfi1 = 1;             // step 3
     wait (irq);
-    #200 pll_int_clr = 1; pll_ini_en = 0; #200 pll_int_clr = 0;
+    #200 pll_int_clr = 1; pll_int_en = 0; #200 pll_int_clr = 0;
     #500;
     if (irq || busy || !done) begin err = err + 1; $display("ERR: state after dfs"); end
 end
@@ -70,8 +70,12 @@ initial begin
     $display("pll period = %0.2f ns", t1 - t0);
     if (t1 - t0 < 4.9 || t1 - t0 > 5.1) err = err + 1;
     dfs(2'd2, 32'd400);
-    // 取消: WFI 前撤销 PLL_INI_EN
-    pll_ini_en = 1; #1000 pll_ini_en = 0; #500;
+    // 未置位 PLL_INT_EN 时进入 WFI 不触发调频
+    wfi0 = 1; wfi1 = 1; #2000;
+    if (busy) begin err = err + 1; $display("ERR: dfs without INT_EN"); end
+    wfi0 = 0; wfi1 = 0;
+    // 取消: WFI 前撤销 PLL_INT_EN
+    pll_int_en = 1; #1000 pll_int_en = 0; #500;
     if (busy) begin err = err + 1; $display("ERR: cancel"); end
     // 超时: 锁死 lock=0
     force pll_lock = 0;
