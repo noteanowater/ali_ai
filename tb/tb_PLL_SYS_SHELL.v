@@ -127,6 +127,14 @@ always @(f400) begin if (rstj && e400 != 0 && $realtime - e400 < 0.75) begin err
 always @(posedge dut.PLL_SYS_PD_ALL) if (rstj && busy && !dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin err = err + 1; $display("ERR: pd asserted with PLL_UPD=0"); end
 always @(dut.PLL_SYS_FBDIV_REG or dut.PLL_SYS_POSTDIV0_0_REG) if (rstj && busy && !dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin err = err + 1; $display("ERR: PLL config changed with PLL_UPD=0"); end
 
+// 7) when the interrupt fires, both glitch-free muxes have finished switching to the target clock
+always @(posedge irq) begin
+    if (dut.U_A45_SRC_CLK_MUX.sel_clkb_dly3 !== dut.PLL_SYS_DFS_DIV2_SEL[0] ||
+        dut.U_PLL_SYS_F400_SRC_CLK_MUX.sel_clkb_dly3 !== dut.PLL_SYS_DFS_DIV2_SEL[1]) begin err = err + 1; $display("ERR: divider mux not settled at IRQ"); end
+    if (dut.U_A45_PLL_OSC_CLK_MUX.sel_clkb_dly3 !== dut.PLL_SYS_DFS_SEL_24M[0] ||
+        dut.U_PLL_SYS_F400_PLL_OSC_CLK_MUX.sel_clkb_dly3 !== dut.PLL_SYS_DFS_SEL_24M[1]) begin err = err + 1; $display("ERR: 24M mux not settled at IRQ"); end
+end
+
 // CPU model: interrupt wakes it from WFI, ISR clears PLL_INT_EN
 always @(posedge irq) begin
     #50 wfi0 = 0; wfi1 = 0;

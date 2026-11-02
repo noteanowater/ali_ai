@@ -11,10 +11,10 @@
 //         1.3 PLL_SYS_INT_EN = 1 (rising edge starts DFS)
 //   SW 2. CPU (both cores) enters WFI
 //   HW 3. Wait until both cores are in WFI (CORE_WFI_MODE_0 / CORE_WFI_MODE_1, see DFS_WFI_PULSE)
-//   HW 4. Per PLL_SYS_DFS_MODE, switch port0/1 to 24M (clk_switch_2to1) or gate it (P_CLK_GATE)
+//   HW 4. Per PLL_SYS_DFS_MODE, switch port0/1 to 24M (CLK_PLL_OSC mux) or gate it (GATE)
 //   HW 5. power down PLL_SYS (pd=1)                                   (PLL_SYS_DFS_PLL_UPD = 1 only)
 //   HW 6. Load PLL_SYS_CFG_0/1/2 into PLL_SYS                         (PLL_SYS_DFS_PLL_UPD = 1 only)
-//         Apply PLL_SYS_DFS_DIV2 to the port dividers
+//         Apply PLL_SYS_DFS_DIV2 to A45_SRC_CLK_SEL (PLL / PLL /2 glitch-free mux)
 //   HW 7. Hold pd for DFS_PD_CYC PLL_SYS_CLK cycles (>=1us), then power up and wait for LOCK
 //         (PLL_SYS_DFS_PLL_UPD = 0: no pd, wait DFS_SETTLE_CYC for the divider switch, PLL stays locked)
 //   HW 8. Switch port0/1 back from gated / 24M to the PLL clock
@@ -359,71 +359,94 @@ clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_OUT_CLK), .rstn(PLL_SYS_RSTJ)
 
 
 //------------------------------------------------------------------------------
-// DFS port0/1 clock path:
-//   PLL clko -> P_CLK_GATE (/1 or /2) -> clk_switch_2to1 (PLL / 24M) -> P_CLK_GATE -> PLL_SYS_F600/F400_CLK
-//   divider    : ICG passes every other clko pulse when /2 (high phase = clko high phase, 25% duty);
-//                select changes only while the port is gated / on 24M during DFS; /1 in TEST_MODE / MBIST_ES_MODE
-//   clk_switch select : 1 selects OSC_24M_CLK; fixed to PLL in TEST_MODE / MBIST_ES_MODE
-//   P_CLK_GATE EN     : DFS gate request synced into each clock domain and fed back as handshake; reset value 1 (clock on during boot)
+// DFS port0/1 clock path (port0 = A45 core clock):
+//
+//   PLL clko --GATE--> PLL_SYS_A45_CLK --+--> A45_CORE_CLK_DIV --> CORE_A45_DIV_CLK --+
+//                                        |                                            |
+//                                        +--------------------------------------------+--> Glitch-Free-MUX (A45_SRC_CLK_SEL)
+//                                                                                              |
+//                                                         OSC_24M_CLK ----> Glitch-Free-MUX (CLK_PLL_OSC) --> PLL_SYS_F600_CLK
+//
+//   GATE (P_CLK_GATE)   : DFS gate request synced into the PLL clko domain and fed back as handshake;
+//                         reset value 1 (clock on during boot)
+//   A45_SRC_CLK_SEL     : 1 selects the /2 clock (e.g. 500MHz -> 250MHz without touching the PLL); 0 in TEST / MBIST
+//   CLK_PLL_OSC         : 1 selects OSC_24M_CLK; 0 in TEST_MODE / MBIST_ES_MODE
+//   port1 (F400) uses the same structure
 //------------------------------------------------------------------------------
-wire [1:0] PLL_SYS_DFS_DIV2_SEL ;
-wire       PLL_SYS_F600_DIV2_S ;
-wire       PLL_SYS_F400_DIV2_S ;
-reg        PLL_SYS_F600_DIV2_TGL ;
-reg        PLL_SYS_F400_DIV2_TGL ;
-wire       PLL_SYS_F600_DIV_CLK ;
-wire       PLL_SYS_F400_DIV_CLK ;
-
-PLL_DFS_SYNC2 U_PLL_SYS_F600_DIV2_SYNC (.CLK(PLL_SYS_F600_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_DIV2_SEL[0]), .Q(PLL_SYS_F600_DIV2_S));
-PLL_DFS_SYNC2 U_PLL_SYS_F400_DIV2_SYNC (.CLK(PLL_SYS_F400_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_DIV2_SEL[1]), .Q(PLL_SYS_F400_DIV2_S));
-
-always @ (posedge PLL_SYS_F600_OUT_CLK or negedge PLL_SYS_RSTJ)
-    if (!PLL_SYS_RSTJ) PLL_SYS_F600_DIV2_TGL <= 1'b0 ;
-    else               PLL_SYS_F600_DIV2_TGL <= PLL_SYS_F600_DIV2_S & ~PLL_SYS_F600_DIV2_TGL ;
-
-always @ (posedge PLL_SYS_F400_OUT_CLK or negedge PLL_SYS_RSTJ)
-    if (!PLL_SYS_RSTJ) PLL_SYS_F400_DIV2_TGL <= 1'b0 ;
-    else               PLL_SYS_F400_DIV2_TGL <= PLL_SYS_F400_DIV2_S & ~PLL_SYS_F400_DIV2_TGL ;
-
-P_CLK_GATE U_PLL_SYS_F600_DIV_GATE (.CLK(PLL_SYS_F600_OUT_CLK), .EN(~PLL_SYS_F600_DIV2_S | PLL_SYS_F600_DIV2_TGL), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK(PLL_SYS_F600_DIV_CLK));
-P_CLK_GATE U_PLL_SYS_F400_DIV_GATE (.CLK(PLL_SYS_F400_OUT_CLK), .EN(~PLL_SYS_F400_DIV2_S | PLL_SYS_F400_DIV2_TGL), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK(PLL_SYS_F400_DIV_CLK));
-
 wire [1:0] PLL_SYS_DFS_SEL_24M ;
 wire [1:0] PLL_SYS_DFS_GATE_EN ;
-wire       PLL_SYS_F600_SW_CLK ;
-wire       PLL_SYS_F400_SW_CLK ;
+wire [1:0] PLL_SYS_DFS_DIV2_SEL ;
 wire       PLL_SYS_F600_GATE_EN ;
 wire       PLL_SYS_F400_GATE_EN ;
 
-wire [1:0] PLL_SYS_SEL_24M_DFT = (TEST_MODE | MBIST_ES_MODE) ? 2'b00 : PLL_SYS_DFS_SEL_24M ;
+wire [1:0] PLL_SYS_SEL_24M_DFT  = (TEST_MODE | MBIST_ES_MODE) ? 2'b00 : PLL_SYS_DFS_SEL_24M  ;   // CLK_PLL_OSC
+wire [1:0] PLL_SYS_DIV2_SEL_DFT = (TEST_MODE | MBIST_ES_MODE) ? 2'b00 : PLL_SYS_DFS_DIV2_SEL ;   // A45_SRC_CLK_SEL
 
-clk_switch_2to1 U_PLL_SYS_F600_CLK_SW (
-    .test_mode  (1'b0                   ),
-    .test_se    (1'b0                   ),
-    .rst_n      (PLL_SYS_RSTJ           ),
-    .clka       (PLL_SYS_F600_DIV_CLK   ),
-    .clkb       (OSC_24M_CLK            ),
-    .select     (PLL_SYS_SEL_24M_DFT[0] ),
-    .sel_clk    (PLL_SYS_CLK            ),
-    .clk_o      (PLL_SYS_F600_SW_CLK    )
+// ---------------- GATE ----------------
+wire       PLL_SYS_A45_CLK      ;
+wire       PLL_SYS_F400_G_CLK   ;
+
+PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F600_GATE_SYNC (.CLK(PLL_SYS_F600_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN[0]), .Q(PLL_SYS_F600_GATE_EN));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F400_GATE_SYNC (.CLK(PLL_SYS_F400_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN[1]), .Q(PLL_SYS_F400_GATE_EN));
+
+P_CLK_GATE U_PLL_SYS_F600_CLK_GATE (.CLK(PLL_SYS_F600_OUT_CLK), .EN(PLL_SYS_F600_GATE_EN), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_A45_CLK   ));
+P_CLK_GATE U_PLL_SYS_F400_CLK_GATE (.CLK(PLL_SYS_F400_OUT_CLK), .EN(PLL_SYS_F400_GATE_EN), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_F400_G_CLK));
+
+// ---------------- /2 divider ----------------
+wire       CORE_A45_DIV_CLK     ;
+wire       PLL_SYS_F400_DIV_CLK ;
+
+A45_CORE_CLK_DIV U_A45_CORE_CLK_DIV     (.CLK(PLL_SYS_A45_CLK   ), .RSTJ(PLL_SYS_RSTJ), .CLK_DIV(CORE_A45_DIV_CLK    ));
+A45_CORE_CLK_DIV U_PLL_SYS_F400_CLK_DIV (.CLK(PLL_SYS_F400_G_CLK), .RSTJ(PLL_SYS_RSTJ), .CLK_DIV(PLL_SYS_F400_DIV_CLK));
+
+// ---------------- Glitch-Free-MUX: PLL / PLL /2 (A45_SRC_CLK_SEL) ----------------
+wire       PLL_SYS_A45_SRC_CLK  ;
+wire       PLL_SYS_F400_SRC_CLK ;
+
+clk_switch_2to1 U_A45_SRC_CLK_MUX (
+    .test_mode  (1'b0                    ),
+    .test_se    (1'b0                    ),
+    .rst_n      (PLL_SYS_RSTJ            ),
+    .clka       (PLL_SYS_A45_CLK         ),
+    .clkb       (CORE_A45_DIV_CLK        ),
+    .select     (PLL_SYS_DIV2_SEL_DFT[0] ),
+    .sel_clk    (PLL_SYS_CLK             ),
+    .clk_o      (PLL_SYS_A45_SRC_CLK     )
 );
 
-clk_switch_2to1 U_PLL_SYS_F400_CLK_SW (
-    .test_mode  (1'b0                   ),
-    .test_se    (1'b0                   ),
-    .rst_n      (PLL_SYS_RSTJ           ),
-    .clka       (PLL_SYS_F400_DIV_CLK   ),
-    .clkb       (OSC_24M_CLK            ),
-    .select     (PLL_SYS_SEL_24M_DFT[1] ),
-    .sel_clk    (PLL_SYS_CLK            ),
-    .clk_o      (PLL_SYS_F400_SW_CLK    )
+clk_switch_2to1 U_PLL_SYS_F400_SRC_CLK_MUX (
+    .test_mode  (1'b0                    ),
+    .test_se    (1'b0                    ),
+    .rst_n      (PLL_SYS_RSTJ            ),
+    .clka       (PLL_SYS_F400_G_CLK      ),
+    .clkb       (PLL_SYS_F400_DIV_CLK    ),
+    .select     (PLL_SYS_DIV2_SEL_DFT[1] ),
+    .sel_clk    (PLL_SYS_CLK             ),
+    .clk_o      (PLL_SYS_F400_SRC_CLK    )
 );
 
-PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F600_GATE_SYNC (.CLK(PLL_SYS_F600_SW_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN[0]), .Q(PLL_SYS_F600_GATE_EN));
-PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F400_GATE_SYNC (.CLK(PLL_SYS_F400_SW_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN[1]), .Q(PLL_SYS_F400_GATE_EN));
+// ---------------- Glitch-Free-MUX: PLL / OSC_24M (CLK_PLL_OSC) ----------------
+clk_switch_2to1 U_A45_PLL_OSC_CLK_MUX (
+    .test_mode  (1'b0                    ),
+    .test_se    (1'b0                    ),
+    .rst_n      (PLL_SYS_RSTJ            ),
+    .clka       (PLL_SYS_A45_SRC_CLK     ),
+    .clkb       (OSC_24M_CLK             ),
+    .select     (PLL_SYS_SEL_24M_DFT[0]  ),
+    .sel_clk    (PLL_SYS_CLK             ),
+    .clk_o      (PLL_SYS_F600_CLK        )
+);
 
-P_CLK_GATE U_PLL_SYS_F600_CLK_GATE (.CLK(PLL_SYS_F600_SW_CLK), .EN(PLL_SYS_F600_GATE_EN), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_F600_CLK));
-P_CLK_GATE U_PLL_SYS_F400_CLK_GATE (.CLK(PLL_SYS_F400_SW_CLK), .EN(PLL_SYS_F400_GATE_EN), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_F400_CLK));
+clk_switch_2to1 U_PLL_SYS_F400_PLL_OSC_CLK_MUX (
+    .test_mode  (1'b0                    ),
+    .test_se    (1'b0                    ),
+    .rst_n      (PLL_SYS_RSTJ            ),
+    .clka       (PLL_SYS_F400_SRC_CLK    ),
+    .clkb       (OSC_24M_CLK             ),
+    .select     (PLL_SYS_SEL_24M_DFT[1]  ),
+    .sel_clk    (PLL_SYS_CLK             ),
+    .clk_o      (PLL_SYS_F400_CLK        )
+);
 
 
 PLL_SYS_DFS_CTRL #(
@@ -458,6 +481,23 @@ PLL_SYS_DFS_CTRL #(
 );
 
 
+endmodule
+
+
+//==============================================================================
+// A45_CORE_CLK_DIV: divide-by-2 clock divider, 50% duty
+//   (define as a generated clock in SDC; may be replaced by the library / existing divider)
+//==============================================================================
+module A45_CORE_CLK_DIV (
+    input  wire CLK     ,
+    input  wire RSTJ    ,
+    output wire CLK_DIV
+);
+reg CLK_DIV_REG ;
+always @(posedge CLK or negedge RSTJ)
+    if (!RSTJ) CLK_DIV_REG <= 1'b0 ;
+    else       CLK_DIV_REG <= ~CLK_DIV_REG ;
+assign CLK_DIV = CLK_DIV_REG ;
 endmodule
 
 
