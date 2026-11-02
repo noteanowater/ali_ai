@@ -26,6 +26,7 @@ reg sel_clkb_d0,sel_clkb_d1;
 reg sel_clkb_dly1,sel_clkb_dly2,sel_clkb_dly3;
 
 reg sel_clka,sel_clkb;
+reg sel_clka_off_n,sel_clkb_off_n;
 
 wire clka_g,clkb_g;
 
@@ -57,7 +58,7 @@ begin
         sel_clka_d1 <= 1'b0;
     end
     else begin
-        sel_clka_d0 <= sel_clka & (~sel_clkb_dly3);
+        sel_clka_d0 <= sel_clka & (~sel_clkb_off_n);
         sel_clka_d1 <= sel_clka_d0 ;
     end
 end
@@ -85,7 +86,7 @@ begin
         sel_clkb_d1 <= 1'b0;
     end
     else begin
-        sel_clkb_d0 <= sel_clkb & (~sel_clka_dly3);
+        sel_clkb_d0 <= sel_clkb & (~sel_clka_off_n);
         sel_clkb_d1 <= sel_clkb_d0 ;
     end
 end
@@ -104,6 +105,23 @@ begin
         sel_clkb_dly3 <= sel_clkb_dly2 ;
     end
 end
+
+
+//-----------------part 2.5 negedge copy of gate enable for the other clock---------------------
+// ICG latch closes on the falling edge after its EN drops, so the other clock may only be
+// enabled after that falling edge; otherwise, when the other clock is much faster, its gate
+// opens while this clock's last high phase is still passing and clk_o glitches.
+always @ (negedge clka or negedge rst_n)
+    if (!rst_n)
+        sel_clka_off_n <= 1'b0;
+    else
+        sel_clka_off_n <= sel_clka_dly3;
+
+always @ (negedge clkb or negedge rst_n)
+    if (!rst_n)
+        sel_clkb_off_n <= 1'b0;
+    else
+        sel_clkb_off_n <= sel_clkb_dly3;
 
 
 //-----------------part 3 each clk have its own gated clk---------------------
