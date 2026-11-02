@@ -241,4 +241,12 @@ initial begin
     $finish;
 end
 initial #5_000_000 begin $display("TIMEOUT"); $finish; end
+
+// waveform dump: +define+FSDB (Verdi) or +define+VCD / -DVCD
+`ifdef FSDB
+initial begin $fsdbDumpfile("tb_PLL_SYS_SHELL.fsdb"); $fsdbDumpvars(0, tb_PLL_SYS_SHELL); end
+`endif
+`ifdef VCD
+initial begin $dumpfile("tb_PLL_SYS_SHELL.vcd"); $dumpvars(0, tb_PLL_SYS_SHELL); end
+`endif
 endmodule
