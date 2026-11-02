@@ -59,6 +59,8 @@ always #20.833 osc = ~osc;                   // 24MHz, also used as PLL_SYS_CLK
 reg  [31:0] cfg0; reg [28:0] cfg1; reg [31:0] cfg2;
 reg  cfg_en = 0, int_en = 0, wfi0 = 0, wfi1 = 0;
 reg  [1:0] mode = 0;
+reg        upd = 1;
+reg  [1:0] div2 = 0;
 wire f600, f400, lock, irq, busy, done, tmo;
 integer err = 0;
 
@@ -74,7 +76,7 @@ PLL_SYS_SHELL #(.DFS_LOCK_TIMEOUT_CYC(2000), .DFS_WFI_PULSE(WFI_PULSE)) dut (
     .PLL_SYS_SCAN_DIV1_CLK(), .PLL_SYS_SCAN_DIV2_CLK(),
     .PLL_SYS_CLK_DIV1(8'h3b), .PLL_SYS_CLK_DIV2(8'h27),
     .PLL_SYS_CFG_0(cfg0), .PLL_SYS_CFG_1(cfg1), .PLL_SYS_CFG_2(cfg2), .PLL_SYS_CFG_EN(cfg_en),
-    .PLL_SYS_DFS_MODE(mode), .PLL_SYS_INT_EN(int_en),
+    .PLL_SYS_DFS_MODE(mode), .PLL_SYS_DFS_PLL_UPD(upd), .PLL_SYS_DFS_DIV2(div2), .PLL_SYS_INT_EN(int_en),
     .CORE_WFI_MODE_0(wfi0), .CORE_WFI_MODE_1(wfi1), .CORE_CLK(f600),
     .PLL_SYS_LOCK_INT(irq), .PLL_SYS_DFS_BUSY(busy), .PLL_SYS_DFS_DONE(done), .PLL_SYS_LOCK_TIMEOUT(tmo),
     .DFT_CPU_SPEED_SEL(2'b00), .MBIST_ES_MODE(1'b0), .TEST_MODE(1'b0),
@@ -114,12 +116,16 @@ always @(posedge f400) if (st >= 3 && st <= 5) begin
     l400 = $realtime;
 end else l400 = 0;
 // 5) 24M-mode ports must keep running at 24M during pd
-always @(posedge dut.U_PLL_SYS_DFS_CTRL.CLK) if (st == 4 && dut.U_PLL_SYS_DFS_CTRL.STATE_NXT == 5) begin
+always @(posedge dut.U_PLL_SYS_DFS_CTRL.CLK) if (st == 4 && dut.U_PLL_SYS_DFS_CTRL.STATE_NXT == 5 && dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin
     if (ml[0] && l600 == 0) begin err = err + 1; $display("ERR: F600 no 24M clock during pd"); end
     if (ml[1] && l400 == 0) begin err = err + 1; $display("ERR: F400 no 24M clock during pd"); end
 end
 always @(f600) begin if (rstj && e600 != 0 && $realtime - e600 < 0.75) begin err = err + 1; $display("ERR: F600 glitch @%0t", $time); end e600 = $realtime; end
 always @(f400) begin if (rstj && e400 != 0 && $realtime - e400 < 0.75) begin err = err + 1; $display("ERR: F400 glitch @%0t", $time); end e400 = $realtime; end
+
+// 6) PLL_UPD = 0: PLL must not be powered down and its config must not change
+always @(posedge dut.PLL_SYS_PD_ALL) if (rstj && busy && !dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin err = err + 1; $display("ERR: pd asserted with PLL_UPD=0"); end
+always @(dut.PLL_SYS_FBDIV_REG or dut.PLL_SYS_POSTDIV0_0_REG) if (rstj && busy && !dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin err = err + 1; $display("ERR: PLL config changed with PLL_UPD=0"); end
 
 // CPU model: interrupt wakes it from WFI, ISR clears PLL_INT_EN
 always @(posedge irq) begin
@@ -169,6 +175,16 @@ initial begin
     #300 rstj = 1;
     wait (lock); #500;
     $display("boot (reset cfg):"); measure(500.0, 400.0);
+
+    // divider only, PLL kept at 500MHz (PLL_UPD = 0)
+    upd = 0;
+    div2 = 2'b01; dfs(2'b00, 12'd250, 5'd3, 3'd3, 3'd4);   // port0 /2, both gated    -> 250 / 400
+    measure(250.0, 400.0);
+    div2 = 2'b11; dfs(2'b11, 12'd250, 5'd3, 3'd3, 3'd4);   // both /2, both on 24M    -> 250 / 200
+    measure(250.0, 200.0);
+    div2 = 2'b00; dfs(2'b01, 12'd250, 5'd3, 3'd3, 3'd4);   // back to /1              -> 500 / 400
+    measure(500.0, 400.0);
+    upd = 1;
 
     dfs(2'b00, 12'd399, 5'd4, 3'd3, 3'd5);   // both ports gated,   -> 598.5 / 399
     measure(598.5, 399.0);

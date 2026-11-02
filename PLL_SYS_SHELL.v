@@ -4,15 +4,19 @@
 // DFS (hardware dynamic frequency switching) flow:
 //   SW 0. CPU runs the boot flow
 //   SW 1. CPU reads the CPU freq parameters from flash and programs SCU:
-//         1.1 PLL_SYS_CFG_0/1/2 (do NOT write PLL_SYS_CFG_EN)
+//         1.0 PLL_SYS_DFS_PLL_UPD: 1 = reprogram PLL (steps 5-7), 0 = keep PLL (e.g. 500MHz -> 250MHz by divider)
+//             PLL_SYS_DFS_DIV2[1:0]: port0(F600) / port1(F400) divide-by-2 after DFS (1: /2, 0: /1)
+//         1.1 PLL_SYS_CFG_0/1/2 (do NOT write PLL_SYS_CFG_EN), only needed if PLL_SYS_DFS_PLL_UPD = 1
 //         1.2 PLL_SYS_DFS_MODE[1:0]: during DFS, port0(F600) / port1(F400) switches to 24M (1) or is gated (0)
 //         1.3 PLL_SYS_INT_EN = 1 (rising edge starts DFS)
 //   SW 2. CPU (both cores) enters WFI
 //   HW 3. Wait until both cores are in WFI (CORE_WFI_MODE_0 / CORE_WFI_MODE_1, see DFS_WFI_PULSE)
 //   HW 4. Per PLL_SYS_DFS_MODE, switch port0/1 to 24M (clk_switch_2to1) or gate it (P_CLK_GATE)
-//   HW 5. power down PLL_SYS (pd=1)
-//   HW 6. Load PLL_SYS_CFG_0/1/2 into PLL_SYS
+//   HW 5. power down PLL_SYS (pd=1)                                   (PLL_SYS_DFS_PLL_UPD = 1 only)
+//   HW 6. Load PLL_SYS_CFG_0/1/2 into PLL_SYS                         (PLL_SYS_DFS_PLL_UPD = 1 only)
+//         Apply PLL_SYS_DFS_DIV2 to the port dividers
 //   HW 7. Hold pd for DFS_PD_CYC PLL_SYS_CLK cycles (>=1us), then power up and wait for LOCK
+//         (PLL_SYS_DFS_PLL_UPD = 0: no pd, wait DFS_SETTLE_CYC for the divider switch, PLL stays locked)
 //   HW 8. Switch port0/1 back from gated / 24M to the PLL clock
 //   HW 9. Raise PLL_SYS_LOCK_INT (-> A45_INT[30]) to wake up the CPU
 //   SW 10. CPU writes PLL_SYS_INT_EN = 0 (clears the interrupt and disables it)
@@ -59,6 +63,8 @@ module PLL_SYS_SHELL #(
 
     // ---------------- DFS ----------------
     input  wire [1:0]  PLL_SYS_DFS_MODE      , // SCU: [0] port0(F600) / [1] port1(F400), 1: switch to 24M, 0: gate
+    input  wire        PLL_SYS_DFS_PLL_UPD   , // SCU: 1: DFS reprograms PLL (pd + CFG load + relock), 0: keep PLL
+    input  wire [1:0]  PLL_SYS_DFS_DIV2      , // SCU: [0] port0 / [1] port1 divider after DFS, 1: /2, 0: /1
     input  wire        PLL_SYS_INT_EN        , // SCU PLL_INT_EN: rising edge starts DFS, 0 clears the interrupt
     input  wire        CORE_WFI_MODE_0       , // u_a45_top.core_wfi_mode_0
     input  wire        CORE_WFI_MODE_1       , // u_a45_top.core_wfi_mode_1
@@ -353,10 +359,35 @@ clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_OUT_CLK), .rstn(PLL_SYS_RSTJ)
 
 
 //------------------------------------------------------------------------------
-// DFS port0/1 clock path: PLL clko -> clk_switch_2to1 (PLL / 24M) -> P_CLK_GATE -> PLL_SYS_F600/F400_CLK
+// DFS port0/1 clock path:
+//   PLL clko -> P_CLK_GATE (/1 or /2) -> clk_switch_2to1 (PLL / 24M) -> P_CLK_GATE -> PLL_SYS_F600/F400_CLK
+//   divider    : ICG passes every other clko pulse when /2 (high phase = clko high phase, 25% duty);
+//                select changes only while the port is gated / on 24M during DFS; /1 in TEST_MODE / MBIST_ES_MODE
 //   clk_switch select : 1 selects OSC_24M_CLK; fixed to PLL in TEST_MODE / MBIST_ES_MODE
 //   P_CLK_GATE EN     : DFS gate request synced into each clock domain and fed back as handshake; reset value 1 (clock on during boot)
 //------------------------------------------------------------------------------
+wire [1:0] PLL_SYS_DFS_DIV2_SEL ;
+wire       PLL_SYS_F600_DIV2_S ;
+wire       PLL_SYS_F400_DIV2_S ;
+reg        PLL_SYS_F600_DIV2_TGL ;
+reg        PLL_SYS_F400_DIV2_TGL ;
+wire       PLL_SYS_F600_DIV_CLK ;
+wire       PLL_SYS_F400_DIV_CLK ;
+
+PLL_DFS_SYNC2 U_PLL_SYS_F600_DIV2_SYNC (.CLK(PLL_SYS_F600_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_DIV2_SEL[0]), .Q(PLL_SYS_F600_DIV2_S));
+PLL_DFS_SYNC2 U_PLL_SYS_F400_DIV2_SYNC (.CLK(PLL_SYS_F400_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_DIV2_SEL[1]), .Q(PLL_SYS_F400_DIV2_S));
+
+always @ (posedge PLL_SYS_F600_OUT_CLK or negedge PLL_SYS_RSTJ)
+    if (!PLL_SYS_RSTJ) PLL_SYS_F600_DIV2_TGL <= 1'b0 ;
+    else               PLL_SYS_F600_DIV2_TGL <= PLL_SYS_F600_DIV2_S & ~PLL_SYS_F600_DIV2_TGL ;
+
+always @ (posedge PLL_SYS_F400_OUT_CLK or negedge PLL_SYS_RSTJ)
+    if (!PLL_SYS_RSTJ) PLL_SYS_F400_DIV2_TGL <= 1'b0 ;
+    else               PLL_SYS_F400_DIV2_TGL <= PLL_SYS_F400_DIV2_S & ~PLL_SYS_F400_DIV2_TGL ;
+
+P_CLK_GATE U_PLL_SYS_F600_DIV_GATE (.CLK(PLL_SYS_F600_OUT_CLK), .EN(~PLL_SYS_F600_DIV2_S | PLL_SYS_F600_DIV2_TGL), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK(PLL_SYS_F600_DIV_CLK));
+P_CLK_GATE U_PLL_SYS_F400_DIV_GATE (.CLK(PLL_SYS_F400_OUT_CLK), .EN(~PLL_SYS_F400_DIV2_S | PLL_SYS_F400_DIV2_TGL), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK(PLL_SYS_F400_DIV_CLK));
+
 wire [1:0] PLL_SYS_DFS_SEL_24M ;
 wire [1:0] PLL_SYS_DFS_GATE_EN ;
 wire       PLL_SYS_F600_SW_CLK ;
@@ -370,7 +401,7 @@ clk_switch_2to1 U_PLL_SYS_F600_CLK_SW (
     .test_mode  (1'b0                   ),
     .test_se    (1'b0                   ),
     .rst_n      (PLL_SYS_RSTJ           ),
-    .clka       (PLL_SYS_F600_OUT_CLK   ),
+    .clka       (PLL_SYS_F600_DIV_CLK   ),
     .clkb       (OSC_24M_CLK            ),
     .select     (PLL_SYS_SEL_24M_DFT[0] ),
     .sel_clk    (PLL_SYS_CLK            ),
@@ -381,7 +412,7 @@ clk_switch_2to1 U_PLL_SYS_F400_CLK_SW (
     .test_mode  (1'b0                   ),
     .test_se    (1'b0                   ),
     .rst_n      (PLL_SYS_RSTJ           ),
-    .clka       (PLL_SYS_F400_OUT_CLK   ),
+    .clka       (PLL_SYS_F400_DIV_CLK   ),
     .clkb       (OSC_24M_CLK            ),
     .select     (PLL_SYS_SEL_24M_DFT[1] ),
     .sel_clk    (PLL_SYS_CLK            ),
@@ -408,12 +439,15 @@ PLL_SYS_DFS_CTRL #(
     .RSTJ               (PLL_SYS_RSTJ        ),
     .INT_EN             (PLL_SYS_INT_EN_DFT  ),
     .DFS_MODE           (PLL_SYS_DFS_MODE    ),
+    .PLL_UPD            (PLL_SYS_DFS_PLL_UPD ),
+    .DIV2               (PLL_SYS_DFS_DIV2    ),
     .CORE_WFI_MODE_0    (CORE_WFI_MODE_0     ),
     .CORE_WFI_MODE_1    (CORE_WFI_MODE_1     ),
     .CORE_CLK           (CORE_CLK            ),
     .PLL_LOCK           (PLL_SYS_LOCK        ),
     .SEL_24M            (PLL_SYS_DFS_SEL_24M ),
     .GATE_EN            (PLL_SYS_DFS_GATE_EN ),
+    .DIV2_SEL           (PLL_SYS_DFS_DIV2_SEL),
     .GATE_EN_FB         ({PLL_SYS_F400_GATE_EN, PLL_SYS_F600_GATE_EN}),
     .CFG_LOAD           (PLL_SYS_DFS_CFG_LOAD),
     .PLL_PD             (PLL_SYS_DFS_PD      ),
@@ -470,9 +504,9 @@ endmodule
 //   IDLE     --INT_EN rise, latch DFS_MODE-->
 //   WAIT_WFI --both cores in WFI (stable WFI_STABLE_CYC)--> (INT_EN cleared in WAIT_WFI returns to IDLE)
 //   CLK_OFF  : MODE=1 ports switch to 24M, MODE=0 ports are gated; wait gate handshake & CLK_SW_CYC
-//   PD       : pd=1
-//   APPLY    : CFG_LOAD, hold pd for PD_CYC
-//   WAIT_LOCK: pd=0, wait for stable LOCK / timeout
+//   PD       : pd=1 (PLL_UPD only); update DIV2_SEL
+//   APPLY    : CFG_LOAD, hold pd for PD_CYC (PLL_UPD only)
+//   WAIT_LOCK: pd=0, wait SETTLE_CYC, then stable LOCK / timeout
 //   CLK_ON   : switch back to PLL / ungate; wait gate handshake & CLK_SW_CYC
 //   DONE     : LOCK_INT=1 --> IDLE
 //==============================================================================
@@ -491,14 +525,17 @@ module PLL_SYS_DFS_CTRL #(
     input  wire              RSTJ           ,
     input  wire              INT_EN         ,  // rising edge starts DFS, 0 clears the interrupt
     input  wire [N_PORT-1:0] DFS_MODE       ,  // 1: switch to 24M during DFS, 0: gate during DFS
+    input  wire              PLL_UPD        ,  // 1: reprogram PLL (pd + CFG_LOAD + relock), 0: keep PLL
+    input  wire [N_PORT-1:0] DIV2           ,  // port divider after DFS, 1: /2, 0: /1
     input  wire              CORE_WFI_MODE_0,
     input  wire              CORE_WFI_MODE_1,
     input  wire              CORE_CLK       ,  // clock of CORE_WFI_MODE_0/1
     input  wire              PLL_LOCK       ,
     output reg  [N_PORT-1:0] SEL_24M        ,  // clk_switch select (1: 24M)
     output reg  [N_PORT-1:0] GATE_EN        ,  // ICG request (1: on)
+    output reg  [N_PORT-1:0] DIV2_SEL       ,  // port divider select (1: /2), changes only while ports are off
     input  wire [N_PORT-1:0] GATE_EN_FB     ,  // actual ICG EN in each clock domain, handshake feedback
-    output wire              CFG_LOAD       ,  // load PLL config (one cycle, pd already 1)
+    output wire              CFG_LOAD       ,  // load PLL config (one cycle, pd already 1; PLL_UPD only)
     output reg               PLL_PD         ,  // PLL pd (active high)
     output wire              DFS_BUSY       ,
     output reg               DFS_DONE       ,
@@ -519,6 +556,8 @@ reg  [2:0]        STATE, STATE_NXT;
 reg  [CNT_W-1:0]  CNT;
 reg  [CNT_W-1:0]  TMO_CNT;
 reg  [N_PORT-1:0] MODE_L;
+reg               PLL_UPD_L;
+reg  [N_PORT-1:0] DIV2_L;
 
 // synchronizers
 wire              INT_EN_S, WFI0_S, WFI1_S, LOCK_S;
@@ -589,8 +628,16 @@ always @(posedge CLK or negedge RSTJ)
     else       STATE <= STATE_NXT;
 
 always @(posedge CLK or negedge RSTJ)
-    if (!RSTJ)       MODE_L <= {N_PORT{1'b0}};
-    else if (START)  MODE_L <= DFS_MODE;
+    if (!RSTJ) begin
+        MODE_L    <= {N_PORT{1'b0}};
+        PLL_UPD_L <= 1'b1;
+        DIV2_L    <= {N_PORT{1'b0}};
+    end
+    else if (START) begin
+        MODE_L    <= DFS_MODE;
+        PLL_UPD_L <= PLL_UPD;
+        DIV2_L    <= DIV2;
+    end
 
 // shared counter: loaded on state entry, counts down to 0 within the state
 always @(posedge CLK or negedge RSTJ) begin
@@ -603,7 +650,7 @@ always @(posedge CLK or negedge RSTJ) begin
                           else if (!CNT_HIT)          CNT <= CNT - 1'b1;
                           else                        CNT <= CLK_SW_CYC - 1;
             ST_CLK_OFF  : if (!CNT_HIT)               CNT <= CNT - 1'b1;
-            ST_PD       : CNT <= PD_CYC - 1;
+            ST_PD       : CNT <= PLL_UPD_L ? PD_CYC - 1 : {CNT_W{1'b0}};
             ST_APPLY    : if (!CNT_HIT)               CNT <= CNT - 1'b1;
                           else                        CNT <= SETTLE_CYC + LOCK_STABLE_CYC - 1;
             ST_WAIT_LOCK: if (LOCK_OK || TMO_HIT)     CNT <= CLK_SW_CYC - 1;
@@ -641,12 +688,17 @@ always @(posedge CLK or negedge RSTJ) begin
 end
 
 // load config one cycle after pd=1
-assign CFG_LOAD = (STATE == ST_PD);
+assign CFG_LOAD = (STATE == ST_PD) && PLL_UPD_L;
 
-// pd: set on entering PD, held PD_CYC cycles after load, released on entering WAIT_LOCK
+// port divider: switched while ports are gated / on 24M
+always @(posedge CLK or negedge RSTJ)
+    if (!RSTJ)                 DIV2_SEL <= {N_PORT{1'b0}};
+    else if (STATE == ST_PD)   DIV2_SEL <= DIV2_L;
+
+// pd: set on entering PD, held PD_CYC cycles after load, released on entering WAIT_LOCK (PLL_UPD only)
 always @(posedge CLK or negedge RSTJ)
     if (!RSTJ) PLL_PD <= 1'b0;
-    else       PLL_PD <= (STATE_NXT == ST_PD) || (STATE_NXT == ST_APPLY);
+    else       PLL_PD <= PLL_UPD_L && ((STATE_NXT == ST_PD) || (STATE_NXT == ST_APPLY));
 
 assign DFS_BUSY = (STATE != ST_IDLE);
 
