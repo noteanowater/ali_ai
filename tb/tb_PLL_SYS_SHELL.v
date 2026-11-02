@@ -104,16 +104,16 @@ always @(dut.PLL_SYS_FBDIV_REG or dut.PLL_SYS_PREDIV_REG or dut.PLL_SYS_POSTDIV0
 end
 always @(negedge dut.PLL_SYS_PD_ALL)
     if (rstj && busy && $realtime - cfg_t < 1000.0) begin err = err + 1; $display("ERR: pd released < 1us after divider set"); end
-// 3) during pd: no edges on gated ports, only 24M clock on 24M-mode ports
+// 3) during PD..WAIT_LOCK: 24M-mode ports run only at 24M; PLL-path ports have no clock if the PLL is reprogrammed
 // 4) glitch-free outputs: every high/low phase >= 0.75ns (fastest PLL half period ~0.835ns)
 realtime l600 = 0, l400 = 0, e600 = 0, e400 = 0;
 always @(posedge f600) if (st >= 3 && st <= 5) begin
-    if (!ml[0]) begin err = err + 1; $display("ERR: F600 edge while gated"); end
+    if (!ml[0]) begin if (dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin err = err + 1; $display("ERR: F600 edge while gated"); end end
     else if (l600 != 0 && $realtime - l600 < 40.0) begin err = err + 1; $display("ERR: F600 not 24M during pd"); end
     l600 = $realtime;
 end else l600 = 0;
 always @(posedge f400) if (st >= 3 && st <= 5) begin
-    if (!ml[1]) begin err = err + 1; $display("ERR: F400 edge while gated"); end
+    if (!ml[1]) begin if (dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin err = err + 1; $display("ERR: F400 edge while gated"); end end
     else if (l400 != 0 && $realtime - l400 < 40.0) begin err = err + 1; $display("ERR: F400 not 24M during pd"); end
     l400 = $realtime;
 end else l400 = 0;
@@ -128,6 +128,11 @@ always @(f400) begin if (rstj && e400 != 0 && $realtime - e400 < 0.75) begin err
 // 6) PLL_UPD = 0: PLL must not be powered down and its config must not change
 always @(posedge dut.PLL_SYS_PD_ALL) if (rstj && busy && !dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin err = err + 1; $display("ERR: pd asserted with PLL_UPD=0"); end
 always @(dut.PLL_SYS_FBDIV_REG or dut.PLL_SYS_POSTDIV0_0_REG) if (rstj && busy && !dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin err = err + 1; $display("ERR: PLL config changed with PLL_UPD=0"); end
+
+// 8) the common GATE is 0 only around the PLL power down (CLK_OFF..WAIT_LOCK with PLL_UPD)
+always @(posedge osc) #1 if (rstj && !dut.PLL_SYS_DFS_GATE_EN &&
+                            !(dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L && st >= 2 && st <= 5)) begin
+    err = err + 1; $display("ERR: GATE closed outside PLL power down @%0t", $time); end
 
 // 7) when the interrupt fires, both glitch-free muxes have finished switching to the target clock
 always @(posedge irq) begin

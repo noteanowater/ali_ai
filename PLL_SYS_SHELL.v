@@ -7,24 +7,26 @@
 //         1.0 PLL_SYS_DFS_PLL_UPD: 1 = reprogram PLL (steps 5-7), 0 = keep PLL (e.g. 500MHz -> 250MHz by divider)
 //             PLL_SYS_DFS_DIV2[1:0]: port0(F600) / port1(F400) divide-by-2 after DFS (1: /2, 0: /1)
 //         1.1 PLL_SYS_CFG_0/1/2 (do NOT write PLL_SYS_CFG_EN), only needed if PLL_SYS_DFS_PLL_UPD = 1
-//         1.2 PLL_SYS_DFS_MODE[1:0]: during DFS, port0(F600) / port1(F400) switches to 24M (1) or is gated (0)
+//         1.2 PLL_SYS_DFS_MODE[1:0] (CLK_PLL_OSC): during DFS, port0(F600) / port1(F400) switches to 24M (1)
+//             or stays on the PLL path (0, no clock while the PLL is powered down)
 //         1.3 PLL_SYS_INT_EN = 1 (rising edge starts DFS)
 //   SW 2. CPU (both cores) enters WFI
 //   HW 3. Wait until both cores are in WFI (CORE_WFI_MODE_0 / CORE_WFI_MODE_1, see DFS_WFI_PULSE)
-//   HW 4. Per PLL_SYS_DFS_MODE, switch port0/1 to 24M (CLK_PLL_OSC mux) or gate it (GATE)
+//   HW 4. Per PLL_SYS_DFS_MODE (CLK_PLL_OSC), switch port0/1 to 24M, or keep it on the PLL path;
+//         if the PLL is reprogrammed, close the common GATE (a port kept on the PLL path then has no clock)
 //   HW 5. power down PLL_SYS (pd=1)                                   (PLL_SYS_DFS_PLL_UPD = 1 only)
 //   HW 6. Load PLL_SYS_CFG_0/1/2 into PLL_SYS                         (PLL_SYS_DFS_PLL_UPD = 1 only)
 //         Apply PLL_SYS_DFS_DIV2 to A45_SRC_CLK_SEL (PLL / PLL /2 glitch-free mux)
 //   HW 7. Hold pd for DFS_PD_CYC PLL_SYS_CLK cycles (>=1us), then power up and wait for LOCK
 //         (PLL_SYS_DFS_PLL_UPD = 0: no pd, wait DFS_SETTLE_CYC for the divider switch, PLL stays locked)
-//   HW 8. Switch port0/1 back from gated / 24M to the PLL clock
+//   HW 8. After LOCK open the GATE and switch 24M ports back to the PLL clock
 //   HW 9. Raise PLL_SYS_LOCK_INT (-> A45_INT[30]) to wake up the CPU
 //   SW 10. ISR writes 1 to the interrupt status bit (W1C, PLL_SYS_INT_CLR); PLL_SYS_INT_EN = 0 after boot
 //
 //   PLL_SYS_LOCK_INT is a level interrupt = status & PLL_SYS_INT_EN. The status is set when DFS completes and
 //   cleared by write-1-to-clear: PLL_SYS_INT_CLR is the SCU W1C strobe (pulse or level, rising edge used) in the
 //   SCU_CLK domain, synced to PLL_SYS_CLK by a toggle synchronizer, so a 1-cycle pulse from a fast SCU_CLK is not lost
-//   LOCK timeout (DFS_LOCK_TIMEOUT_CYC != 0): ports in 24M mode stay on 24M, gated ports are ungated,
+//   LOCK timeout (DFS_LOCK_TIMEOUT_CYC != 0): ports in 24M mode stay on 24M, the GATE is opened,
 //   PLL_SYS_LOCK_TIMEOUT is set and the interrupt is raised
 //   The original PLL_SYS_CFG_EN rising-edge immediate load path is kept; DFS is disabled in TEST_MODE / MBIST_ES_MODE
 //   PLL_SYS_CLK must be free-running (DFS FSM / pd counter / clk_switch select registers)
@@ -64,7 +66,7 @@ module PLL_SYS_SHELL #(
     input  wire        PLL_SYS_CFG_EN        ,
 
     // ---------------- DFS ----------------
-    input  wire [1:0]  PLL_SYS_DFS_MODE      , // SCU: [0] port0(F600) / [1] port1(F400), 1: switch to 24M, 0: gate
+    input  wire [1:0]  PLL_SYS_DFS_MODE      , // SCU: CLK_PLL_OSC during DFS, [0] port0 / [1] port1, 1: 24M, 0: PLL path
     input  wire        PLL_SYS_DFS_PLL_UPD   , // SCU: 1: DFS reprograms PLL (pd + CFG load + relock), 0: keep PLL
     input  wire [1:0]  PLL_SYS_DFS_DIV2      , // SCU: [0] port0 / [1] port1 divider after DFS, 1: /2, 0: /1
     input  wire        PLL_SYS_INT_EN        , // SCU PLL_INT_EN: rising edge starts DFS, interrupt enable (mask)
@@ -371,14 +373,15 @@ clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_OUT_CLK), .rstn(PLL_SYS_RSTJ)
 //                                                                                              |
 //                                                         OSC_24M_CLK ----> Glitch-Free-MUX (CLK_PLL_OSC) --> PLL_SYS_F600_CLK
 //
-//   GATE (P_CLK_GATE)   : DFS gate request synced into the PLL clko domain and fed back as handshake;
-//                         reset value 1 (clock on during boot)
+//   GATE (P_CLK_GATE)   : one common enable for both ports, pure hardware: 0 only around the PLL power down
+//                         (DFS with PLL_SYS_DFS_PLL_UPD = 1), 1 otherwise; synced into each PLL clko domain and
+//                         fed back as handshake; reset value 1 (clock on during boot)
 //   A45_SRC_CLK_SEL     : 1 selects the /2 clock (e.g. 500MHz -> 250MHz without touching the PLL); 0 in TEST / MBIST
 //   CLK_PLL_OSC         : 1 selects OSC_24M_CLK; 0 in TEST_MODE / MBIST_ES_MODE
 //   port1 (F400) uses the same structure
 //------------------------------------------------------------------------------
 wire [1:0] PLL_SYS_DFS_SEL_24M ;
-wire [1:0] PLL_SYS_DFS_GATE_EN ;
+wire       PLL_SYS_DFS_GATE_EN ;
 wire [1:0] PLL_SYS_DFS_DIV2_SEL ;
 wire       PLL_SYS_F600_GATE_EN ;
 wire       PLL_SYS_F400_GATE_EN ;
@@ -390,8 +393,8 @@ wire [1:0] PLL_SYS_DIV2_SEL_DFT = (TEST_MODE | MBIST_ES_MODE) ? 2'b00 : PLL_SYS_
 wire       PLL_SYS_A45_CLK      ;
 wire       PLL_SYS_F400_G_CLK   ;
 
-PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F600_GATE_SYNC (.CLK(PLL_SYS_F600_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN[0]), .Q(PLL_SYS_F600_GATE_EN));
-PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F400_GATE_SYNC (.CLK(PLL_SYS_F400_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN[1]), .Q(PLL_SYS_F400_GATE_EN));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F600_GATE_SYNC (.CLK(PLL_SYS_F600_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN   ), .Q(PLL_SYS_F600_GATE_EN));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F400_GATE_SYNC (.CLK(PLL_SYS_F400_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN   ), .Q(PLL_SYS_F400_GATE_EN));
 
 P_CLK_GATE U_PLL_SYS_F600_CLK_GATE (.CLK(PLL_SYS_F600_OUT_CLK), .EN(PLL_SYS_F600_GATE_EN), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_A45_CLK   ));
 P_CLK_GATE U_PLL_SYS_F400_CLK_GATE (.CLK(PLL_SYS_F400_OUT_CLK), .EN(PLL_SYS_F400_GATE_EN), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_F400_G_CLK));
@@ -547,14 +550,20 @@ endmodule
 //==============================================================================
 // PLL_SYS_DFS_CTRL: DFS FSM (CLK is the free-running PLL_SYS_CLK)
 //
-//   IDLE     --INT_EN rise, latch DFS_MODE-->
+//   IDLE     --INT_EN rise, latch DFS_MODE / PLL_UPD / DIV2-->
 //   WAIT_WFI --both cores in WFI (stable WFI_STABLE_CYC)--> (INT_EN cleared in WAIT_WFI returns to IDLE)
-//   CLK_OFF  : MODE=1 ports switch to 24M, MODE=0 ports are gated; wait gate handshake & CLK_SW_CYC
+//   CLK_OFF  : MODE=1 ports switch to 24M (CLK_PLL_OSC=1), MODE=0 ports stay on the PLL path; wait CLK_SW_CYC,
+//              then (PLL_UPD) close the common GATE and wait for its handshake
 //   PD       : pd=1 (PLL_UPD only); update DIV2_SEL
 //   APPLY    : CFG_LOAD, hold pd for PD_CYC (PLL_UPD only)
 //   WAIT_LOCK: pd=0, wait SETTLE_CYC, then stable LOCK / timeout
-//   CLK_ON   : switch back to PLL / ungate; wait gate handshake & CLK_SW_CYC
+//   CLK_ON   : open GATE, wait for its handshake, then switch 24M ports back to PLL and wait CLK_SW_CYC
 //   DONE     : set interrupt status (W1C) --> IDLE
+//
+//   GATE is pure hardware: 0 only around the PLL power down (CLK_OFF .. WAIT_LOCK with PLL_UPD), 1 otherwise.
+//   A MODE=0 port has no clock while GATE is 0; with PLL_UPD=0 its divider switches through the glitch-free mux.
+//   The glitch-free muxes need both input clocks while switching, so the GATE closes only after the 24M switch
+//   is done and opens before switching back.
 //==============================================================================
 module PLL_SYS_DFS_CTRL #(
     parameter CNT_W            = 16,
@@ -572,17 +581,20 @@ module PLL_SYS_DFS_CTRL #(
     input  wire              INT_EN         ,  // rising edge starts DFS, interrupt enable (mask)
     input  wire              INT_CLR        ,  // W1C strobe of the interrupt status (pulse or level, INT_CLR_CLK domain)
     input  wire              INT_CLR_CLK    ,  // clock of INT_CLR
-    input  wire [N_PORT-1:0] DFS_MODE       ,  // 1: switch to 24M during DFS, 0: gate during DFS
-    input  wire              PLL_UPD        ,  // 1: reprogram PLL (pd + CFG_LOAD + relock), 0: keep PLL
+    input  wire [N_PORT-1:0] DFS_MODE       ,  // CLK_PLL_OSC during DFS, 1: switch to 24M, 0: stay on PLL (stopped by GATE)
+    input  wire              PLL_UPD        ,  // 1: reprogram PLL (GATE + pd + CFG_LOAD + relock), 0: keep PLL
     input  wire [N_PORT-1:0] DIV2           ,  // port divider after DFS, 1: /2, 0: /1
     input  wire              CORE_WFI_MODE_0,
     input  wire              CORE_WFI_MODE_1,
     input  wire              CORE_CLK       ,  // clock of CORE_WFI_MODE_0/1
     input  wire              PLL_LOCK       ,
-    output reg  [N_PORT-1:0] SEL_24M        ,  // clk_switch select (1: 24M)
-    output reg  [N_PORT-1:0] GATE_EN        ,  // ICG request (1: on)
-    output reg  [N_PORT-1:0] DIV2_SEL       ,  // port divider select (1: /2), changes only while ports are off
-    input  wire [N_PORT-1:0] GATE_EN_FB     ,  // actual ICG EN in each clock domain, handshake feedback
+
+    output reg  [N_PORT-1:0] SEL_24M        ,  // CLK_PLL_OSC (1: 24M)
+    output reg               GATE_EN        ,  // common GATE enable of all ports (0 only around PLL power down)
+    output reg  [N_PORT-1:0] DIV2_SEL       ,  // A45_SRC_CLK_SEL (1: /2)
+
+    input  wire [N_PORT-1:0] GATE_EN_FB     ,  // GATE_EN synced in each port clock domain, handshake feedback
+
     output wire              CFG_LOAD       ,  // load PLL config (one cycle, pd already 1; PLL_UPD only)
     output reg               PLL_PD         ,  // PLL pd (active high)
     output wire              DFS_BUSY       ,
@@ -615,31 +627,26 @@ reg               INT_EN_S_D;
 PLL_DFS_SYNC2 U_SYNC_INTEN (.CLK(CLK), .RSTJ(RSTJ), .D(INT_EN         ), .Q(INT_EN_S));
 PLL_DFS_SYNC2 U_SYNC_LOCK  (.CLK(CLK), .RSTJ(RSTJ), .D(PLL_LOCK       ), .Q(LOCK_S  ));
 
+PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_SYNC_FB0 (.CLK(CLK), .RSTJ(RSTJ), .D(GATE_EN_FB[0]), .Q(GATE_FB_S[0]));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_SYNC_FB1 (.CLK(CLK), .RSTJ(RSTJ), .D(GATE_EN_FB[1]), .Q(GATE_FB_S[1]));
+
 // WFI CDC: CORE_CLK (fast) -> CLK (slow)
-generate
-    if (WFI_PULSE) begin : G_WFI_PULSE
-        // sticky capture in CORE_CLK domain, armed by INT_EN, so a 1-cycle pulse is never missed
-        wire       ARM_C;
-        reg  [1:0] WFI_SEEN;
-        PLL_DFS_SYNC2 U_SYNC_ARM (.CLK(CORE_CLK), .RSTJ(RSTJ), .D(INT_EN), .Q(ARM_C));
-        always @(posedge CORE_CLK or negedge RSTJ)
-            if (!RSTJ)       WFI_SEEN <= 2'b00;
-            else if (!ARM_C) WFI_SEEN <= 2'b00;
-            else             WFI_SEEN <= WFI_SEEN | {CORE_WFI_MODE_1, CORE_WFI_MODE_0};
-        PLL_DFS_SYNC2 U_SYNC_WFI0 (.CLK(CLK), .RSTJ(RSTJ), .D(WFI_SEEN[0]), .Q(WFI0_S));
-        PLL_DFS_SYNC2 U_SYNC_WFI1 (.CLK(CLK), .RSTJ(RSTJ), .D(WFI_SEEN[1]), .Q(WFI1_S));
-    end
-    else begin : G_WFI_LEVEL
-        PLL_DFS_SYNC2 U_SYNC_WFI0 (.CLK(CLK), .RSTJ(RSTJ), .D(CORE_WFI_MODE_0), .Q(WFI0_S));
-        PLL_DFS_SYNC2 U_SYNC_WFI1 (.CLK(CLK), .RSTJ(RSTJ), .D(CORE_WFI_MODE_1), .Q(WFI1_S));
-    end
-endgenerate
-genvar I;
-generate
-    for (I = 0; I < N_PORT; I = I + 1) begin : G_FB_SYNC
-        PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_SYNC_FB (.CLK(CLK), .RSTJ(RSTJ), .D(GATE_EN_FB[I]), .Q(GATE_FB_S[I]));
-    end
-endgenerate
+//   WFI_PULSE = 1: sticky capture in CORE_CLK domain, armed by INT_EN, so a 1-cycle pulse is never missed
+//   WFI_PULSE = 0: level, synced directly
+wire       ARM_C;
+reg  [1:0] WFI_SEEN;
+wire       WFI0_IN = WFI_PULSE ? WFI_SEEN[0] : CORE_WFI_MODE_0;
+wire       WFI1_IN = WFI_PULSE ? WFI_SEEN[1] : CORE_WFI_MODE_1;
+
+PLL_DFS_SYNC2 U_SYNC_ARM (.CLK(CORE_CLK), .RSTJ(RSTJ), .D(INT_EN), .Q(ARM_C));
+
+always @(posedge CORE_CLK or negedge RSTJ)
+    if (!RSTJ)       WFI_SEEN <= 2'b00;
+    else if (!ARM_C) WFI_SEEN <= 2'b00;
+    else             WFI_SEEN <= WFI_SEEN | {CORE_WFI_MODE_1, CORE_WFI_MODE_0};
+
+PLL_DFS_SYNC2 U_SYNC_WFI0  (.CLK(CLK), .RSTJ(RSTJ), .D(WFI0_IN), .Q(WFI0_S));
+PLL_DFS_SYNC2 U_SYNC_WFI1  (.CLK(CLK), .RSTJ(RSTJ), .D(WFI1_IN), .Q(WFI1_S));
 
 always @(posedge CLK or negedge RSTJ)
     if (!RSTJ) INT_EN_S_D <= 1'b0;
@@ -647,8 +654,8 @@ always @(posedge CLK or negedge RSTJ)
 
 wire START      = INT_EN_S & ~INT_EN_S_D;
 wire WFI_ALL    = WFI0_S & WFI1_S;
-wire CLK_OFF_OK = &(MODE_L | ~GATE_FB_S);   // all gate-mode ports are off
-wire CLK_ON_OK  = &GATE_FB_S;               // all port ICGs are on
+wire CLK_OFF_OK = !PLL_UPD_L || !(|GATE_FB_S);  // PLL_UPD: GATE closed in all port clock domains
+wire CLK_ON_OK  = &GATE_FB_S;                   // GATE open in all port clock domains
 
 wire CNT_HIT    = (CNT == {CNT_W{1'b0}});
 wire TMO_EN     = (LOCK_TIMEOUT_CYC != 0);
@@ -705,7 +712,8 @@ always @(posedge CLK or negedge RSTJ) begin
                           else if (CNT < LOCK_STABLE_CYC && !LOCK_S)
                                                       CNT <= LOCK_STABLE_CYC - 1;  // LOCK must stay high continuously
                           else if (!CNT_HIT)          CNT <= CNT - 1'b1;
-            ST_CLK_ON   : if (!CNT_HIT)               CNT <= CNT - 1'b1;
+            ST_CLK_ON   : if (!CLK_ON_OK)             CNT <= CLK_SW_CYC - 1;       // count after GATE is open
+                          else if (!CNT_HIT)          CNT <= CNT - 1'b1;
             default     : CNT <= {CNT_W{1'b0}};
         endcase
     end
@@ -719,26 +727,32 @@ always @(posedge CLK or negedge RSTJ)
 
 wire TIMEOUT_NOW = (STATE == ST_WAIT_LOCK) && TMO_HIT && !LOCK_OK;
 
-// port control: CLK_OFF switches to 24M / gates per mode; CLK_ON restores (on timeout, 24M-mode ports stay on 24M)
+// CLK_PLL_OSC: CLK_OFF switches MODE=1 ports to 24M; CLK_ON switches back once the GATE is open
+// (on LOCK timeout, MODE=1 ports stay on 24M)
 always @(posedge CLK or negedge RSTJ) begin
-    if (!RSTJ) begin
+    if (!RSTJ)
         SEL_24M <= {N_PORT{1'b0}};
-        GATE_EN <= {N_PORT{1'b1}};
-    end
-    else if (STATE == ST_WAIT_WFI && STATE_NXT == ST_CLK_OFF) begin
-        SEL_24M <=  MODE_L;
-        GATE_EN <=  MODE_L;
-    end
-    else if (STATE == ST_WAIT_LOCK && STATE_NXT == ST_CLK_ON) begin
-        SEL_24M <= TIMEOUT_NOW ? MODE_L : {N_PORT{1'b0}};
-        GATE_EN <= {N_PORT{1'b1}};
-    end
+    else if (STATE == ST_WAIT_WFI && STATE_NXT == ST_CLK_OFF)
+        SEL_24M <= MODE_L;
+    else if (STATE == ST_CLK_ON && CLK_ON_OK)
+        SEL_24M <= LOCK_TIMEOUT ? MODE_L : {N_PORT{1'b0}};
+end
+
+// common GATE: closed after the 24M switch and before PLL power down, opened after LOCK (or timeout);
+// always 1 when PLL_UPD = 0
+always @(posedge CLK or negedge RSTJ) begin
+    if (!RSTJ)
+        GATE_EN <= 1'b1;
+    else if (STATE == ST_CLK_OFF && CNT_HIT && PLL_UPD_L)
+        GATE_EN <= 1'b0;
+    else if (STATE == ST_WAIT_LOCK && STATE_NXT == ST_CLK_ON)
+        GATE_EN <= 1'b1;
 end
 
 // load config one cycle after pd=1
 assign CFG_LOAD = (STATE == ST_PD) && PLL_UPD_L;
 
-// port divider: switched while ports are gated / on 24M
+// port divider: switched while ports are gated / on 24M (or through the glitch-free mux when PLL_UPD = 0)
 always @(posedge CLK or negedge RSTJ)
     if (!RSTJ)                 DIV2_SEL <= {N_PORT{1'b0}};
     else if (STATE == ST_PD)   DIV2_SEL <= DIV2_L;
