@@ -515,114 +515,114 @@ localparam ST_WAIT_LOCK = 3'd5;   // step 7
 localparam ST_CLK_ON    = 3'd6;   // step 8
 localparam ST_DONE      = 3'd7;   // step 9
 
-reg  [2:0]        state, state_nxt;
-reg  [CNT_W-1:0]  cnt;
-reg  [CNT_W-1:0]  tmo_cnt;
-reg  [N_PORT-1:0] mode_l;
+reg  [2:0]        STATE, STATE_NXT;
+reg  [CNT_W-1:0]  CNT;
+reg  [CNT_W-1:0]  TMO_CNT;
+reg  [N_PORT-1:0] MODE_L;
 
 // synchronizers
-wire              int_en_s, wfi0_s, wfi1_s, lock_s;
-wire [N_PORT-1:0] gate_fb_s;
-reg               int_en_s_d;
+wire              INT_EN_S, WFI0_S, WFI1_S, LOCK_S;
+wire [N_PORT-1:0] GATE_FB_S;
+reg               INT_EN_S_D;
 
-PLL_DFS_SYNC2 U_SYNC_INTEN (.CLK(CLK), .RSTJ(RSTJ), .D(INT_EN         ), .Q(int_en_s));
-PLL_DFS_SYNC2 U_SYNC_LOCK  (.CLK(CLK), .RSTJ(RSTJ), .D(PLL_LOCK       ), .Q(lock_s  ));
+PLL_DFS_SYNC2 U_SYNC_INTEN (.CLK(CLK), .RSTJ(RSTJ), .D(INT_EN         ), .Q(INT_EN_S));
+PLL_DFS_SYNC2 U_SYNC_LOCK  (.CLK(CLK), .RSTJ(RSTJ), .D(PLL_LOCK       ), .Q(LOCK_S  ));
 
 // WFI CDC: CORE_CLK (fast) -> CLK (slow)
 generate
     if (WFI_PULSE) begin : G_WFI_PULSE
         // sticky capture in CORE_CLK domain, armed by INT_EN, so a 1-cycle pulse is never missed
-        wire       arm_c;
-        reg  [1:0] wfi_seen;
-        PLL_DFS_SYNC2 U_SYNC_ARM (.CLK(CORE_CLK), .RSTJ(RSTJ), .D(INT_EN), .Q(arm_c));
+        wire       ARM_C;
+        reg  [1:0] WFI_SEEN;
+        PLL_DFS_SYNC2 U_SYNC_ARM (.CLK(CORE_CLK), .RSTJ(RSTJ), .D(INT_EN), .Q(ARM_C));
         always @(posedge CORE_CLK or negedge RSTJ)
-            if (!RSTJ)       wfi_seen <= 2'b00;
-            else if (!arm_c) wfi_seen <= 2'b00;
-            else             wfi_seen <= wfi_seen | {CORE_WFI_MODE_1, CORE_WFI_MODE_0};
-        PLL_DFS_SYNC2 U_SYNC_WFI0 (.CLK(CLK), .RSTJ(RSTJ), .D(wfi_seen[0]), .Q(wfi0_s));
-        PLL_DFS_SYNC2 U_SYNC_WFI1 (.CLK(CLK), .RSTJ(RSTJ), .D(wfi_seen[1]), .Q(wfi1_s));
+            if (!RSTJ)       WFI_SEEN <= 2'b00;
+            else if (!ARM_C) WFI_SEEN <= 2'b00;
+            else             WFI_SEEN <= WFI_SEEN | {CORE_WFI_MODE_1, CORE_WFI_MODE_0};
+        PLL_DFS_SYNC2 U_SYNC_WFI0 (.CLK(CLK), .RSTJ(RSTJ), .D(WFI_SEEN[0]), .Q(WFI0_S));
+        PLL_DFS_SYNC2 U_SYNC_WFI1 (.CLK(CLK), .RSTJ(RSTJ), .D(WFI_SEEN[1]), .Q(WFI1_S));
     end
     else begin : G_WFI_LEVEL
-        PLL_DFS_SYNC2 U_SYNC_WFI0 (.CLK(CLK), .RSTJ(RSTJ), .D(CORE_WFI_MODE_0), .Q(wfi0_s));
-        PLL_DFS_SYNC2 U_SYNC_WFI1 (.CLK(CLK), .RSTJ(RSTJ), .D(CORE_WFI_MODE_1), .Q(wfi1_s));
+        PLL_DFS_SYNC2 U_SYNC_WFI0 (.CLK(CLK), .RSTJ(RSTJ), .D(CORE_WFI_MODE_0), .Q(WFI0_S));
+        PLL_DFS_SYNC2 U_SYNC_WFI1 (.CLK(CLK), .RSTJ(RSTJ), .D(CORE_WFI_MODE_1), .Q(WFI1_S));
     end
 endgenerate
-genvar i;
+genvar I;
 generate
-    for (i = 0; i < N_PORT; i = i + 1) begin : G_FB_SYNC
-        PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_SYNC_FB (.CLK(CLK), .RSTJ(RSTJ), .D(GATE_EN_FB[i]), .Q(gate_fb_s[i]));
+    for (I = 0; I < N_PORT; I = I + 1) begin : G_FB_SYNC
+        PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_SYNC_FB (.CLK(CLK), .RSTJ(RSTJ), .D(GATE_EN_FB[I]), .Q(GATE_FB_S[I]));
     end
 endgenerate
 
 always @(posedge CLK or negedge RSTJ)
-    if (!RSTJ) int_en_s_d <= 1'b0;
-    else       int_en_s_d <= int_en_s;
+    if (!RSTJ) INT_EN_S_D <= 1'b0;
+    else       INT_EN_S_D <= INT_EN_S;
 
-wire start      = int_en_s & ~int_en_s_d;
-wire wfi_all    = wfi0_s & wfi1_s;
-wire clk_off_ok = &(mode_l | ~gate_fb_s);   // all gate-mode ports are off
-wire clk_on_ok  = &gate_fb_s;               // all port ICGs are on
+wire START      = INT_EN_S & ~INT_EN_S_D;
+wire WFI_ALL    = WFI0_S & WFI1_S;
+wire CLK_OFF_OK = &(MODE_L | ~GATE_FB_S);   // all gate-mode ports are off
+wire CLK_ON_OK  = &GATE_FB_S;               // all port ICGs are on
 
-wire cnt_hit    = (cnt == {CNT_W{1'b0}});
-wire tmo_en     = (LOCK_TIMEOUT_CYC != 0);
-wire tmo_hit    = tmo_en & (tmo_cnt == {CNT_W{1'b0}});
-wire lock_ok    = lock_s & cnt_hit;
+wire CNT_HIT    = (CNT == {CNT_W{1'b0}});
+wire TMO_EN     = (LOCK_TIMEOUT_CYC != 0);
+wire TMO_HIT    = TMO_EN & (TMO_CNT == {CNT_W{1'b0}});
+wire LOCK_OK    = LOCK_S & CNT_HIT;
 
 always @(*) begin
-    state_nxt = state;
-    case (state)
-        ST_IDLE     : if (start)                        state_nxt = ST_WAIT_WFI;
-        ST_WAIT_WFI : if (!int_en_s)                    state_nxt = ST_IDLE;      // SW cancel
-                      else if (wfi_all && cnt_hit)      state_nxt = ST_CLK_OFF;
-        ST_CLK_OFF  : if (clk_off_ok && cnt_hit)        state_nxt = ST_PD;
-        ST_PD       :                                   state_nxt = ST_APPLY;
-        ST_APPLY    : if (cnt_hit)                      state_nxt = ST_WAIT_LOCK;
-        ST_WAIT_LOCK: if (lock_ok || tmo_hit)           state_nxt = ST_CLK_ON;
-        ST_CLK_ON   : if (clk_on_ok && cnt_hit)         state_nxt = ST_DONE;
-        ST_DONE     :                                   state_nxt = ST_IDLE;
-        default     :                                   state_nxt = ST_IDLE;
+    STATE_NXT = STATE;
+    case (STATE)
+        ST_IDLE     : if (START)                        STATE_NXT = ST_WAIT_WFI;
+        ST_WAIT_WFI : if (!INT_EN_S)                    STATE_NXT = ST_IDLE;      // SW cancel
+                      else if (WFI_ALL && CNT_HIT)      STATE_NXT = ST_CLK_OFF;
+        ST_CLK_OFF  : if (CLK_OFF_OK && CNT_HIT)        STATE_NXT = ST_PD;
+        ST_PD       :                                   STATE_NXT = ST_APPLY;
+        ST_APPLY    : if (CNT_HIT)                      STATE_NXT = ST_WAIT_LOCK;
+        ST_WAIT_LOCK: if (LOCK_OK || TMO_HIT)           STATE_NXT = ST_CLK_ON;
+        ST_CLK_ON   : if (CLK_ON_OK && CNT_HIT)         STATE_NXT = ST_DONE;
+        ST_DONE     :                                   STATE_NXT = ST_IDLE;
+        default     :                                   STATE_NXT = ST_IDLE;
     endcase
 end
 
 always @(posedge CLK or negedge RSTJ)
-    if (!RSTJ) state <= ST_IDLE;
-    else       state <= state_nxt;
+    if (!RSTJ) STATE <= ST_IDLE;
+    else       STATE <= STATE_NXT;
 
 always @(posedge CLK or negedge RSTJ)
-    if (!RSTJ)       mode_l <= {N_PORT{1'b0}};
-    else if (start)  mode_l <= DFS_MODE;
+    if (!RSTJ)       MODE_L <= {N_PORT{1'b0}};
+    else if (START)  MODE_L <= DFS_MODE;
 
 // shared counter: loaded on state entry, counts down to 0 within the state
 always @(posedge CLK or negedge RSTJ) begin
     if (!RSTJ)
-        cnt <= {CNT_W{1'b0}};
+        CNT <= {CNT_W{1'b0}};
     else begin
-        case (state)
-            ST_IDLE     : cnt <= WFI_STABLE_CYC - 1;
-            ST_WAIT_WFI : if (!wfi_all)               cnt <= WFI_STABLE_CYC - 1;   // WFI must stay high continuously
-                          else if (!cnt_hit)          cnt <= cnt - 1'b1;
-                          else                        cnt <= CLK_SW_CYC - 1;
-            ST_CLK_OFF  : if (!cnt_hit)               cnt <= cnt - 1'b1;
-            ST_PD       : cnt <= PD_CYC - 1;
-            ST_APPLY    : if (!cnt_hit)               cnt <= cnt - 1'b1;
-                          else                        cnt <= SETTLE_CYC + LOCK_STABLE_CYC - 1;
-            ST_WAIT_LOCK: if (lock_ok || tmo_hit)     cnt <= CLK_SW_CYC - 1;
-                          else if (cnt < LOCK_STABLE_CYC && !lock_s)
-                                                      cnt <= LOCK_STABLE_CYC - 1;  // LOCK must stay high continuously
-                          else if (!cnt_hit)          cnt <= cnt - 1'b1;
-            ST_CLK_ON   : if (!cnt_hit)               cnt <= cnt - 1'b1;
-            default     : cnt <= {CNT_W{1'b0}};
+        case (STATE)
+            ST_IDLE     : CNT <= WFI_STABLE_CYC - 1;
+            ST_WAIT_WFI : if (!WFI_ALL)               CNT <= WFI_STABLE_CYC - 1;   // WFI must stay high continuously
+                          else if (!CNT_HIT)          CNT <= CNT - 1'b1;
+                          else                        CNT <= CLK_SW_CYC - 1;
+            ST_CLK_OFF  : if (!CNT_HIT)               CNT <= CNT - 1'b1;
+            ST_PD       : CNT <= PD_CYC - 1;
+            ST_APPLY    : if (!CNT_HIT)               CNT <= CNT - 1'b1;
+                          else                        CNT <= SETTLE_CYC + LOCK_STABLE_CYC - 1;
+            ST_WAIT_LOCK: if (LOCK_OK || TMO_HIT)     CNT <= CLK_SW_CYC - 1;
+                          else if (CNT < LOCK_STABLE_CYC && !LOCK_S)
+                                                      CNT <= LOCK_STABLE_CYC - 1;  // LOCK must stay high continuously
+                          else if (!CNT_HIT)          CNT <= CNT - 1'b1;
+            ST_CLK_ON   : if (!CNT_HIT)               CNT <= CNT - 1'b1;
+            default     : CNT <= {CNT_W{1'b0}};
         endcase
     end
 end
 
 // LOCK timeout counter
 always @(posedge CLK or negedge RSTJ)
-    if (!RSTJ)                        tmo_cnt <= {CNT_W{1'b0}};
-    else if (state != ST_WAIT_LOCK)   tmo_cnt <= tmo_en ? LOCK_TIMEOUT_CYC - 1 : 0;
-    else if (!tmo_hit)                tmo_cnt <= tmo_cnt - 1'b1;
+    if (!RSTJ)                        TMO_CNT <= {CNT_W{1'b0}};
+    else if (STATE != ST_WAIT_LOCK)   TMO_CNT <= TMO_EN ? LOCK_TIMEOUT_CYC - 1 : 0;
+    else if (!TMO_HIT)                TMO_CNT <= TMO_CNT - 1'b1;
 
-wire timeout_now = (state == ST_WAIT_LOCK) && tmo_hit && !lock_ok;
+wire TIMEOUT_NOW = (STATE == ST_WAIT_LOCK) && TMO_HIT && !LOCK_OK;
 
 // port control: CLK_OFF switches to 24M / gates per mode; CLK_ON restores (on timeout, 24M-mode ports stay on 24M)
 always @(posedge CLK or negedge RSTJ) begin
@@ -630,39 +630,39 @@ always @(posedge CLK or negedge RSTJ) begin
         SEL_24M <= {N_PORT{1'b0}};
         GATE_EN <= {N_PORT{1'b1}};
     end
-    else if (state == ST_WAIT_WFI && state_nxt == ST_CLK_OFF) begin
-        SEL_24M <=  mode_l;
-        GATE_EN <=  mode_l;
+    else if (STATE == ST_WAIT_WFI && STATE_NXT == ST_CLK_OFF) begin
+        SEL_24M <=  MODE_L;
+        GATE_EN <=  MODE_L;
     end
-    else if (state == ST_WAIT_LOCK && state_nxt == ST_CLK_ON) begin
-        SEL_24M <= timeout_now ? mode_l : {N_PORT{1'b0}};
+    else if (STATE == ST_WAIT_LOCK && STATE_NXT == ST_CLK_ON) begin
+        SEL_24M <= TIMEOUT_NOW ? MODE_L : {N_PORT{1'b0}};
         GATE_EN <= {N_PORT{1'b1}};
     end
 end
 
 // load config one cycle after pd=1
-assign CFG_LOAD = (state == ST_PD);
+assign CFG_LOAD = (STATE == ST_PD);
 
 // pd: set on entering PD, held PD_CYC cycles after load, released on entering WAIT_LOCK
 always @(posedge CLK or negedge RSTJ)
     if (!RSTJ) PLL_PD <= 1'b0;
-    else       PLL_PD <= (state_nxt == ST_PD) || (state_nxt == ST_APPLY);
+    else       PLL_PD <= (STATE_NXT == ST_PD) || (STATE_NXT == ST_APPLY);
 
-assign DFS_BUSY = (state != ST_IDLE);
+assign DFS_BUSY = (STATE != ST_IDLE);
 
 always @(posedge CLK or negedge RSTJ) begin
     if (!RSTJ) begin
         DFS_DONE     <= 1'b0;
         LOCK_TIMEOUT <= 1'b0;
     end
-    else if (start) begin
+    else if (START) begin
         DFS_DONE     <= 1'b0;
         LOCK_TIMEOUT <= 1'b0;
     end
     else begin
-        if (state == ST_DONE)
+        if (STATE == ST_DONE)
             DFS_DONE <= 1'b1;
-        if (timeout_now)
+        if (TIMEOUT_NOW)
             LOCK_TIMEOUT <= 1'b1;
     end
 end
@@ -670,8 +670,8 @@ end
 // interrupt: set after ports are restored, cleared by INT_EN = 0
 always @(posedge CLK or negedge RSTJ)
     if (!RSTJ)                              LOCK_INT <= 1'b0;
-    else if (!int_en_s)                     LOCK_INT <= 1'b0;
-    else if (state == ST_DONE)              LOCK_INT <= 1'b1;
+    else if (!INT_EN_S)                     LOCK_INT <= 1'b0;
+    else if (STATE == ST_DONE)              LOCK_INT <= 1'b1;
 
 endmodule
 

@@ -90,8 +90,8 @@ end
 endtask
 
 // ---------------- checks ----------------
-wire [2:0] st = dut.U_PLL_SYS_DFS_CTRL.state;
-wire [1:0] ml = dut.U_PLL_SYS_DFS_CTRL.mode_l;
+wire [2:0] st = dut.U_PLL_SYS_DFS_CTRL.STATE;
+wire [1:0] ml = dut.U_PLL_SYS_DFS_CTRL.MODE_L;
 // 1) divider changes only while pd=1 (during DFS); 2) pd released >= 1us after divider change
 realtime cfg_t = 0;
 always @(dut.PLL_SYS_FBDIV_REG or dut.PLL_SYS_PREDIV_REG or dut.PLL_SYS_POSTDIV0_0_REG or dut.PLL_SYS_POSTDIV0_1_REG) begin
@@ -114,7 +114,7 @@ always @(posedge f400) if (st >= 3 && st <= 5) begin
     l400 = $realtime;
 end else l400 = 0;
 // 5) 24M-mode ports must keep running at 24M during pd
-always @(posedge dut.U_PLL_SYS_DFS_CTRL.CLK) if (st == 4 && dut.U_PLL_SYS_DFS_CTRL.state_nxt == 5) begin
+always @(posedge dut.U_PLL_SYS_DFS_CTRL.CLK) if (st == 4 && dut.U_PLL_SYS_DFS_CTRL.STATE_NXT == 5) begin
     if (ml[0] && l600 == 0) begin err = err + 1; $display("ERR: F600 no 24M clock during pd"); end
     if (ml[1] && l400 == 0) begin err = err + 1; $display("ERR: F400 no 24M clock during pd"); end
 end
@@ -196,7 +196,7 @@ initial begin
         // a WFI pulse before INT_EN must be ignored: only core1 pulses after arming -> no DFS
         set_cfg(12'd333, 5'd4, 3'd3, 3'd4);
         wfi_pulse(0); #500 int_en = 1; #500 wfi_pulse(1); #5000;
-        if (dut.U_PLL_SYS_DFS_CTRL.state > 1 || dut.PLL_SYS_FBDIV_REG != 399) begin err = err + 1; $display("ERR: pre-arm WFI pulse not ignored"); end
+        if (dut.U_PLL_SYS_DFS_CTRL.STATE > 1 || dut.PLL_SYS_FBDIV_REG != 399) begin err = err + 1; $display("ERR: pre-arm WFI pulse not ignored"); end
         wfi_pulse(0); wait (irq); wait (!irq); #500;   // core0 WFI after arming completes it
         if (dut.PLL_SYS_FBDIV_REG != 333) begin err = err + 1; $display("ERR: dfs after pre-arm test"); end
         measure(499.5, 399.6);
