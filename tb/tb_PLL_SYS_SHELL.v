@@ -53,11 +53,12 @@ endmodule
 
 //==============================================================================
 module tb_PLL_SYS_SHELL;
-reg osc = 0, rstj = 0;
+reg osc = 0, rstj = 0, scu_clk = 0;
 always #20.833 osc = ~osc;                   // 24MHz, also used as PLL_SYS_CLK
+always #2.5    scu_clk = ~scu_clk;          // 200MHz SCU / APB clock
 
 reg  [31:0] cfg0; reg [28:0] cfg1; reg [31:0] cfg2;
-reg  cfg_en = 0, int_en = 0, wfi0 = 0, wfi1 = 0;
+reg  cfg_en = 0, int_en = 0, int_clr = 0, wfi0 = 0, wfi1 = 0;
 reg  [1:0] mode = 0;
 reg        upd = 1;
 reg  [1:0] div2 = 0;
@@ -77,6 +78,7 @@ PLL_SYS_SHELL #(.DFS_LOCK_TIMEOUT_CYC(2000), .DFS_WFI_PULSE(WFI_PULSE)) dut (
     .PLL_SYS_CLK_DIV1(8'h3b), .PLL_SYS_CLK_DIV2(8'h27),
     .PLL_SYS_CFG_0(cfg0), .PLL_SYS_CFG_1(cfg1), .PLL_SYS_CFG_2(cfg2), .PLL_SYS_CFG_EN(cfg_en),
     .PLL_SYS_DFS_MODE(mode), .PLL_SYS_DFS_PLL_UPD(upd), .PLL_SYS_DFS_DIV2(div2), .PLL_SYS_INT_EN(int_en),
+    .PLL_SYS_INT_CLR(int_clr), .SCU_CLK(scu_clk),
     .CORE_WFI_MODE_0(wfi0), .CORE_WFI_MODE_1(wfi1), .CORE_CLK(f600),
     .PLL_SYS_LOCK_INT(irq), .PLL_SYS_DFS_BUSY(busy), .PLL_SYS_DFS_DONE(done), .PLL_SYS_LOCK_TIMEOUT(tmo),
     .DFT_CPU_SPEED_SEL(2'b00), .MBIST_ES_MODE(1'b0), .TEST_MODE(1'b0),
@@ -135,11 +137,22 @@ always @(posedge irq) begin
         dut.U_PLL_SYS_F400_PLL_OSC_CLK_MUX.sel_clkb_dly3 !== dut.PLL_SYS_DFS_SEL_24M[1]) begin err = err + 1; $display("ERR: 24M mux not settled at IRQ"); end
 end
 
-// CPU model: interrupt wakes it from WFI, ISR clears PLL_INT_EN
+// SCU W1C write: 1-cycle strobe in the 200MHz SCU_CLK domain (shorter than one PLL_SYS_CLK cycle)
+task w1c_int;
+begin
+    @(posedge scu_clk) #0.1 int_clr = 1;
+    @(posedge scu_clk) #0.1 int_clr = 0;
+end
+endtask
+
+// CPU model: interrupt wakes it from WFI; ISR clears the status by W1C (INT_EN stays 1),
+// then INT_EN is cleared later (end of boot) so the next DFS gets a new rising edge
 always @(posedge irq) begin
     #50 wfi0 = 0; wfi1 = 0;
     $display("[%0t] IRQ: mode=%b NI=%0d M=%0d done=%b tmo=%b", $time, ml,
              dut.PLL_SYS_FBDIV_REG, dut.PLL_SYS_PREDIV_REG, done, tmo);
+    #200 w1c_int;
+    #300 if (irq) begin err = err + 1; $display("ERR: interrupt not cleared by W1C"); end
     #200 int_en = 0;
 end
 

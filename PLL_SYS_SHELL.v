@@ -19,9 +19,11 @@
 //         (PLL_SYS_DFS_PLL_UPD = 0: no pd, wait DFS_SETTLE_CYC for the divider switch, PLL stays locked)
 //   HW 8. Switch port0/1 back from gated / 24M to the PLL clock
 //   HW 9. Raise PLL_SYS_LOCK_INT (-> A45_INT[30]) to wake up the CPU
-//   SW 10. CPU writes PLL_SYS_INT_EN = 0 (clears the interrupt and disables it)
+//   SW 10. ISR writes 1 to the interrupt status bit (W1C, PLL_SYS_INT_CLR); PLL_SYS_INT_EN = 0 after boot
 //
-//   PLL_SYS_LOCK_INT is a level interrupt cleared by PLL_SYS_INT_EN = 0, so the ISR must clear PLL_SYS_INT_EN
+//   PLL_SYS_LOCK_INT is a level interrupt = status & PLL_SYS_INT_EN. The status is set when DFS completes and
+//   cleared by write-1-to-clear: PLL_SYS_INT_CLR is the SCU W1C strobe (pulse or level, rising edge used) in the
+//   SCU_CLK domain, synced to PLL_SYS_CLK by a toggle synchronizer, so a 1-cycle pulse from a fast SCU_CLK is not lost
 //   LOCK timeout (DFS_LOCK_TIMEOUT_CYC != 0): ports in 24M mode stay on 24M, gated ports are ungated,
 //   PLL_SYS_LOCK_TIMEOUT is set and the interrupt is raised
 //   The original PLL_SYS_CFG_EN rising-edge immediate load path is kept; DFS is disabled in TEST_MODE / MBIST_ES_MODE
@@ -65,7 +67,9 @@ module PLL_SYS_SHELL #(
     input  wire [1:0]  PLL_SYS_DFS_MODE      , // SCU: [0] port0(F600) / [1] port1(F400), 1: switch to 24M, 0: gate
     input  wire        PLL_SYS_DFS_PLL_UPD   , // SCU: 1: DFS reprograms PLL (pd + CFG load + relock), 0: keep PLL
     input  wire [1:0]  PLL_SYS_DFS_DIV2      , // SCU: [0] port0 / [1] port1 divider after DFS, 1: /2, 0: /1
-    input  wire        PLL_SYS_INT_EN        , // SCU PLL_INT_EN: rising edge starts DFS, 0 clears the interrupt
+    input  wire        PLL_SYS_INT_EN        , // SCU PLL_INT_EN: rising edge starts DFS, interrupt enable (mask)
+    input  wire        PLL_SYS_INT_CLR       , // SCU W1C strobe of the interrupt status (SCU_CLK domain)
+    input  wire        SCU_CLK               , // clock of PLL_SYS_INT_CLR (SCU / APB clock)
     input  wire        CORE_WFI_MODE_0       , // u_a45_top.core_wfi_mode_0
     input  wire        CORE_WFI_MODE_1       , // u_a45_top.core_wfi_mode_1
     input  wire        CORE_CLK              , // clock driving CORE_WFI_MODE_0/1 (A45 core clock)
@@ -461,6 +465,8 @@ PLL_SYS_DFS_CTRL #(
     .CLK                (PLL_SYS_CLK         ),
     .RSTJ               (PLL_SYS_RSTJ        ),
     .INT_EN             (PLL_SYS_INT_EN_DFT  ),
+    .INT_CLR            (PLL_SYS_INT_CLR     ),
+    .INT_CLR_CLK        (SCU_CLK             ),
     .DFS_MODE           (PLL_SYS_DFS_MODE    ),
     .PLL_UPD            (PLL_SYS_DFS_PLL_UPD ),
     .DIV2               (PLL_SYS_DFS_DIV2    ),
@@ -548,7 +554,7 @@ endmodule
 //   APPLY    : CFG_LOAD, hold pd for PD_CYC (PLL_UPD only)
 //   WAIT_LOCK: pd=0, wait SETTLE_CYC, then stable LOCK / timeout
 //   CLK_ON   : switch back to PLL / ungate; wait gate handshake & CLK_SW_CYC
-//   DONE     : LOCK_INT=1 --> IDLE
+//   DONE     : set interrupt status (W1C) --> IDLE
 //==============================================================================
 module PLL_SYS_DFS_CTRL #(
     parameter CNT_W            = 16,
@@ -563,7 +569,9 @@ module PLL_SYS_DFS_CTRL #(
 )(
     input  wire              CLK            ,
     input  wire              RSTJ           ,
-    input  wire              INT_EN         ,  // rising edge starts DFS, 0 clears the interrupt
+    input  wire              INT_EN         ,  // rising edge starts DFS, interrupt enable (mask)
+    input  wire              INT_CLR        ,  // W1C strobe of the interrupt status (pulse or level, INT_CLR_CLK domain)
+    input  wire              INT_CLR_CLK    ,  // clock of INT_CLR
     input  wire [N_PORT-1:0] DFS_MODE       ,  // 1: switch to 24M during DFS, 0: gate during DFS
     input  wire              PLL_UPD        ,  // 1: reprogram PLL (pd + CFG_LOAD + relock), 0: keep PLL
     input  wire [N_PORT-1:0] DIV2           ,  // port divider after DFS, 1: /2, 0: /1
@@ -759,11 +767,40 @@ always @(posedge CLK or negedge RSTJ) begin
     end
 end
 
-// interrupt: set after ports are restored, cleared by INT_EN = 0
+// W1C strobe CDC: INT_CLR_CLK -> CLK (toggle synchronizer, any clock ratio)
+reg  INT_CLR_D, INT_CLR_TGL, INT_CLR_TGL_S_D;
+wire INT_CLR_TGL_S;
+
+always @(posedge INT_CLR_CLK or negedge RSTJ)
+    if (!RSTJ) begin
+        INT_CLR_D   <= 1'b0;
+        INT_CLR_TGL <= 1'b0;
+    end
+    else begin
+        INT_CLR_D   <= INT_CLR;
+        if (INT_CLR && !INT_CLR_D)
+            INT_CLR_TGL <= ~INT_CLR_TGL;
+    end
+
+PLL_DFS_SYNC2 U_SYNC_INT_CLR (.CLK(CLK), .RSTJ(RSTJ), .D(INT_CLR_TGL), .Q(INT_CLR_TGL_S));
+
 always @(posedge CLK or negedge RSTJ)
-    if (!RSTJ)                              LOCK_INT <= 1'b0;
-    else if (!INT_EN_S)                     LOCK_INT <= 1'b0;
-    else if (STATE == ST_DONE)              LOCK_INT <= 1'b1;
+    if (!RSTJ) INT_CLR_TGL_S_D <= 1'b0;
+    else       INT_CLR_TGL_S_D <= INT_CLR_TGL_S;
+
+wire INT_CLR_P = INT_CLR_TGL_S ^ INT_CLR_TGL_S_D;
+
+// interrupt status: set after ports are restored, write-1-to-clear; set has priority
+reg INT_STATUS;
+always @(posedge CLK or negedge RSTJ)
+    if (!RSTJ)                  INT_STATUS <= 1'b0;
+    else if (STATE == ST_DONE)  INT_STATUS <= 1'b1;
+    else if (INT_CLR_P)         INT_STATUS <= 1'b0;
+
+// interrupt output: status masked by INT_EN
+always @(posedge CLK or negedge RSTJ)
+    if (!RSTJ) LOCK_INT <= 1'b0;
+    else       LOCK_INT <= INT_STATUS & INT_EN_S;
 
 endmodule
 
