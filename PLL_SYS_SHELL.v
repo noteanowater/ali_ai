@@ -1,34 +1,34 @@
 //==============================================================================
 // PLL_SYS_SHELL
 //
-// DFS (硬件调频) 流程:
-//   SW 0. CPU 执行 boot 流程
-//   SW 1. CPU 读取 flash 中 CPU Freq 配置参数, 配置 SCU:
-//         1.1 PLL_SYS_CFG_0/1/2 (不写 PLL_SYS_CFG_EN)
-//         1.2 PLL_SYS_DFS_MODE[1:0]: 调频阶段 port0(F600) / port1(F400) 切到 24M (1) 或 gate (0)
-//         1.3 PLL_SYS_INT_EN = 1 (上升沿启动 DFS)
-//   SW 2. CPU (两个 core) 进入 WFI
-//   HW 3. 等待 CORE_WFI_MODE_0 / CORE_WFI_MODE_1 均为 1, 且稳定 2 个 cycle
-//   HW 4. 按 PLL_SYS_DFS_MODE 将 port0/1 切到 24M (clk_switch_2to1) 或 gate (P_CLK_GATE)
+// DFS (hardware dynamic frequency switching) flow:
+//   SW 0. CPU runs the boot flow
+//   SW 1. CPU reads the CPU freq parameters from flash and programs SCU:
+//         1.1 PLL_SYS_CFG_0/1/2 (do NOT write PLL_SYS_CFG_EN)
+//         1.2 PLL_SYS_DFS_MODE[1:0]: during DFS, port0(F600) / port1(F400) switches to 24M (1) or is gated (0)
+//         1.3 PLL_SYS_INT_EN = 1 (rising edge starts DFS)
+//   SW 2. CPU (both cores) enters WFI
+//   HW 3. Wait until CORE_WFI_MODE_0 / CORE_WFI_MODE_1 are both 1 and stable for 2 cycles
+//   HW 4. Per PLL_SYS_DFS_MODE, switch port0/1 to 24M (clk_switch_2to1) or gate it (P_CLK_GATE)
 //   HW 5. power down PLL_SYS (pd=1)
-//   HW 6. 加载 PLL_SYS_CFG_0/1/2 到 PLL_SYS
-//   HW 7. pd 保持 DFS_PD_CYC 个 PLL_SYS_CLK 周期 (>=1us) 后 power up, 等待 LOCK
-//   HW 8. port0/1 从 gate / 24M 切回 PLL 时钟
-//   HW 9. 发出 PLL_SYS_LOCK_INT (-> A45_INT[30]) 唤醒 CPU
-//   SW 10. CPU 配置 PLL_SYS_INT_EN = 0 (清中断, 关闭中断使能)
+//   HW 6. Load PLL_SYS_CFG_0/1/2 into PLL_SYS
+//   HW 7. Hold pd for DFS_PD_CYC PLL_SYS_CLK cycles (>=1us), then power up and wait for LOCK
+//   HW 8. Switch port0/1 back from gated / 24M to the PLL clock
+//   HW 9. Raise PLL_SYS_LOCK_INT (-> A45_INT[30]) to wake up the CPU
+//   SW 10. CPU writes PLL_SYS_INT_EN = 0 (clears the interrupt and disables it)
 //
-//   PLL_SYS_LOCK_INT 为电平中断, 由 PLL_SYS_INT_EN = 0 清除, 因此 ISR 中需清 PLL_SYS_INT_EN
-//   LOCK 超时 (DFS_LOCK_TIMEOUT_CYC != 0): 切 24M 的 port 保持在 24M, gate 的 port 打开,
-//   置 PLL_SYS_LOCK_TIMEOUT 并发中断
-//   原 PLL_SYS_CFG_EN 上升沿立即加载路径保留; TEST_MODE / MBIST_ES_MODE 下 DFS 关闭
-//   PLL_SYS_CLK 须为常开时钟 (DFS 状态机 / pd 计数 / clk_switch 选择寄存器)
+//   PLL_SYS_LOCK_INT is a level interrupt cleared by PLL_SYS_INT_EN = 0, so the ISR must clear PLL_SYS_INT_EN
+//   LOCK timeout (DFS_LOCK_TIMEOUT_CYC != 0): ports in 24M mode stay on 24M, gated ports are ungated,
+//   PLL_SYS_LOCK_TIMEOUT is set and the interrupt is raised
+//   The original PLL_SYS_CFG_EN rising-edge immediate load path is kept; DFS is disabled in TEST_MODE / MBIST_ES_MODE
+//   PLL_SYS_CLK must be free-running (DFS FSM / pd counter / clk_switch select registers)
 //==============================================================================
 module PLL_SYS_SHELL #(
-    parameter DFS_PD_CYC           = 100,  // 加载配置后 pd 保持周期数 (>=1us, 与 PLL_PD_GEN 一致)
-    parameter DFS_CLK_SW_CYC       = 16,   // clk_switch_2to1 切换等待周期数 (PLL_SYS_CLK)
-    parameter DFS_SETTLE_CYC       = 16,   // power up 后, 开始检测 LOCK 前的等待周期
-    parameter DFS_LOCK_STABLE_CYC  = 8,    // LOCK 需连续保持的周期数
-    parameter DFS_LOCK_TIMEOUT_CYC = 0     // 等 LOCK 超时周期数 (0: 不超时)
+    parameter DFS_PD_CYC           = 100,  // pd hold cycles after config load (>=1us, same as PLL_PD_GEN)
+    parameter DFS_CLK_SW_CYC       = 16,   // clk_switch_2to1 switch wait cycles (PLL_SYS_CLK)
+    parameter DFS_SETTLE_CYC       = 16,   // wait cycles after power up before checking LOCK
+    parameter DFS_LOCK_STABLE_CYC  = 8,    // cycles LOCK must stay high continuously
+    parameter DFS_LOCK_TIMEOUT_CYC = 0     // LOCK timeout cycles (0: no timeout)
 )(
     output wire        PLL_SYS_F600_CLK      ,
     output wire        PLL_SYS_F400_CLK      ,
@@ -49,12 +49,12 @@ module PLL_SYS_SHELL #(
     input  wire        PLL_SYS_CFG_EN        ,
 
     // ---------------- DFS ----------------
-    input  wire [1:0]  PLL_SYS_DFS_MODE      , // SCU: [0] port0(F600) / [1] port1(F400), 1: 切 24M, 0: gate
-    input  wire        PLL_SYS_INT_EN        , // SCU PLL_INT_EN: 上升沿启动 DFS, 清 0 清中断
+    input  wire [1:0]  PLL_SYS_DFS_MODE      , // SCU: [0] port0(F600) / [1] port1(F400), 1: switch to 24M, 0: gate
+    input  wire        PLL_SYS_INT_EN        , // SCU PLL_INT_EN: rising edge starts DFS, 0 clears the interrupt
     input  wire        CORE_WFI_MODE_0       , // u_a45_top.core_wfi_mode_0
     input  wire        CORE_WFI_MODE_1       , // u_a45_top.core_wfi_mode_1
     output wire        PLL_SYS_LOCK_INT      , // -> A45_INT[30]
-    output wire        PLL_SYS_DFS_BUSY      , // 状态, 可接 SCU 只读寄存器
+    output wire        PLL_SYS_DFS_BUSY      , // status, may connect to SCU read-only registers
     output wire        PLL_SYS_DFS_DONE      ,
     output wire        PLL_SYS_LOCK_TIMEOUT  ,
 
@@ -142,7 +142,7 @@ end
 wire PLL_SYS_CFG_PULSE ;
 assign PLL_SYS_CFG_PULSE =  PLL_SYS_CFG_EN_D1 & !PLL_SYS_CFG_EN_D2 ;
 
-// 配置加载: 原 CFG_EN 上升沿 或 DFS 流程 (port 已 gate / 切 24M 且 pd=1 后)
+// Config load: CFG_EN rising edge, or DFS flow (after ports are gated / on 24M and pd=1)
 wire PLL_SYS_DFS_CFG_LOAD ;
 wire PLL_SYS_CFG_LOAD = PLL_SYS_CFG_PULSE | PLL_SYS_DFS_CFG_LOAD ;
 
@@ -229,7 +229,7 @@ always @ (posedge PLL_SYS_CLK or negedge PLL_SYS_RSTJ)begin
     PLL_SYS_PREDIV_REG          <= PLL_SYS_PREDIV_DFT        ;
     PLL_SYS_DIS_SSCG_REG        <= PLL_SYS_DIS_SSCG_DFT      ;
     PLL_SYS_TESTEN_REG          <= PLL_SYS_TESTEN_DFT        ;
-    if (PLL_SYS_CFG_PULSE)                                     // DFS 时 pd 由状态机控制, 不改 PD_REG
+    if (PLL_SYS_CFG_PULSE)                                     // in DFS pd is driven by the FSM, PD_REG unchanged
     PLL_SYS_PD_REG              <= PLL_SYS_PD_DFT            ;
     PLL_SYS_FBDIV_REG           <= PLL_SYS_FBDIV_DFT         ;
     PLL_SYS_DACPD_REG           <= PLL_SYS_DACPD_DFT         ;
@@ -285,7 +285,7 @@ PLL_PD_GEN U_PLL_PD_GEN (
  .PLL_RSTJ     (PLL_SYS_RSTJ    )
 );
 
-// DFS power down 与上电 pd 相或
+// DFS power down ORed with power-on pd
 wire PLL_SYS_DFS_PD ;
 wire PLL_SYS_PD_ALL = PLL_SYS_PD | (PLL_SYS_DFS_PD & ~(TEST_MODE | MBIST_ES_MODE)) ;
 
@@ -343,9 +343,9 @@ clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_OUT_CLK), .rstn(PLL_SYS_RSTJ)
 
 
 //------------------------------------------------------------------------------
-// DFS port0/1 时钟通路: PLL clko -> clk_switch_2to1 (PLL / 24M) -> P_CLK_GATE -> PLL_SYS_F600/F400_CLK
-//   clk_switch select : 1 切到 OSC_24M_CLK, TEST_MODE / MBIST_ES_MODE 下固定选 PLL
-//   P_CLK_GATE EN     : DFS gate 请求同步到各自时钟域, 并回传握手; 复位值 1 (boot 时钟常开)
+// DFS port0/1 clock path: PLL clko -> clk_switch_2to1 (PLL / 24M) -> P_CLK_GATE -> PLL_SYS_F600/F400_CLK
+//   clk_switch select : 1 selects OSC_24M_CLK; fixed to PLL in TEST_MODE / MBIST_ES_MODE
+//   P_CLK_GATE EN     : DFS gate request synced into each clock domain and fed back as handshake; reset value 1 (clock on during boot)
 //------------------------------------------------------------------------------
 wire [1:0] PLL_SYS_DFS_SEL_24M ;
 wire [1:0] PLL_SYS_DFS_GATE_EN ;
@@ -453,39 +453,39 @@ endmodule
 
 
 //==============================================================================
-// PLL_SYS_DFS_CTRL: DFS 状态机 (CLK 为常开时钟 PLL_SYS_CLK)
+// PLL_SYS_DFS_CTRL: DFS FSM (CLK is the free-running PLL_SYS_CLK)
 //
-//   IDLE     --INT_EN↑, 锁存 DFS_MODE-->
-//   WAIT_WFI --两 core WFI 稳定 WFI_STABLE_CYC--> (WAIT_WFI 中 INT_EN 清 0 则回 IDLE)
-//   CLK_OFF  : MODE=1 的 port 切 24M, MODE=0 的 port gate; 等 gate 握手 & CLK_SW_CYC
+//   IDLE     --INT_EN rise, latch DFS_MODE-->
+//   WAIT_WFI --both cores in WFI for WFI_STABLE_CYC--> (INT_EN cleared in WAIT_WFI returns to IDLE)
+//   CLK_OFF  : MODE=1 ports switch to 24M, MODE=0 ports are gated; wait gate handshake & CLK_SW_CYC
 //   PD       : pd=1
-//   APPLY    : CFG_LOAD, pd 保持 PD_CYC
-//   WAIT_LOCK: pd=0, 等 LOCK 稳定 / 超时
-//   CLK_ON   : 切回 PLL / 打开 gate; 等 gate 握手 & CLK_SW_CYC
+//   APPLY    : CFG_LOAD, hold pd for PD_CYC
+//   WAIT_LOCK: pd=0, wait for stable LOCK / timeout
+//   CLK_ON   : switch back to PLL / ungate; wait gate handshake & CLK_SW_CYC
 //   DONE     : LOCK_INT=1 --> IDLE
 //==============================================================================
 module PLL_SYS_DFS_CTRL #(
     parameter CNT_W            = 16,
-    parameter N_PORT           = 2,      // PLL 输出 port 数
-    parameter WFI_STABLE_CYC   = 2,      // WFI 需连续保持的周期数 (>=1)
-    parameter PD_CYC           = 100,    // 加载配置后 pd 保持周期数 (>=1us)
-    parameter CLK_SW_CYC       = 16,     // clk_switch 切换等待周期数 (>=1)
-    parameter SETTLE_CYC       = 16,     // power up 后, 开始检测 LOCK 前的等待周期
-    parameter LOCK_STABLE_CYC  = 8,      // LOCK 需连续保持的周期数 (>=1)
-    parameter LOCK_TIMEOUT_CYC = 0       // 等 LOCK 超时周期数 (0: 不超时)
+    parameter N_PORT           = 2,      // number of PLL output ports
+    parameter WFI_STABLE_CYC   = 2,      // cycles WFI must stay high continuously (>=1)
+    parameter PD_CYC           = 100,    // pd hold cycles after config load (>=1us)
+    parameter CLK_SW_CYC       = 16,     // clk_switch switch wait cycles (>=1)
+    parameter SETTLE_CYC       = 16,     // wait cycles after power up before checking LOCK
+    parameter LOCK_STABLE_CYC  = 8,      // cycles LOCK must stay high continuously (>=1)
+    parameter LOCK_TIMEOUT_CYC = 0       // LOCK timeout cycles (0: no timeout)
 )(
     input  wire              CLK            ,
     input  wire              RSTJ           ,
-    input  wire              INT_EN         ,  // 上升沿启动 DFS, 清 0 清中断
-    input  wire [N_PORT-1:0] DFS_MODE       ,  // 1: 调频时切 24M, 0: 调频时 gate
+    input  wire              INT_EN         ,  // rising edge starts DFS, 0 clears the interrupt
+    input  wire [N_PORT-1:0] DFS_MODE       ,  // 1: switch to 24M during DFS, 0: gate during DFS
     input  wire              CORE_WFI_MODE_0,
     input  wire              CORE_WFI_MODE_1,
     input  wire              PLL_LOCK       ,
     output reg  [N_PORT-1:0] SEL_24M        ,  // clk_switch select (1: 24M)
-    output reg  [N_PORT-1:0] GATE_EN        ,  // ICG 请求 (1: 开)
-    input  wire [N_PORT-1:0] GATE_EN_FB     ,  // 各时钟域实际 ICG EN, 回传握手
-    output wire              CFG_LOAD       ,  // 加载 PLL 配置 (单周期, pd 已为 1)
-    output reg               PLL_PD         ,  // PLL pd (高有效)
+    output reg  [N_PORT-1:0] GATE_EN        ,  // ICG request (1: on)
+    input  wire [N_PORT-1:0] GATE_EN_FB     ,  // actual ICG EN in each clock domain, handshake feedback
+    output wire              CFG_LOAD       ,  // load PLL config (one cycle, pd already 1)
+    output reg               PLL_PD         ,  // PLL pd (active high)
     output wire              DFS_BUSY       ,
     output reg               DFS_DONE       ,
     output reg               LOCK_TIMEOUT   ,
@@ -506,7 +506,7 @@ reg  [CNT_W-1:0]  cnt;
 reg  [CNT_W-1:0]  tmo_cnt;
 reg  [N_PORT-1:0] mode_l;
 
-// 同步
+// synchronizers
 wire              int_en_s, wfi0_s, wfi1_s, lock_s;
 wire [N_PORT-1:0] gate_fb_s;
 reg               int_en_s_d;
@@ -529,8 +529,8 @@ always @(posedge CLK or negedge RSTJ)
 
 wire start      = int_en_s & ~int_en_s_d;
 wire wfi_all    = wfi0_s & wfi1_s;
-wire clk_off_ok = &(mode_l | ~gate_fb_s);   // gate 模式的 port 均已关断
-wire clk_on_ok  = &gate_fb_s;               // 所有 port ICG 均已打开
+wire clk_off_ok = &(mode_l | ~gate_fb_s);   // all gate-mode ports are off
+wire clk_on_ok  = &gate_fb_s;               // all port ICGs are on
 
 wire cnt_hit    = (cnt == {CNT_W{1'b0}});
 wire tmo_en     = (LOCK_TIMEOUT_CYC != 0);
@@ -541,7 +541,7 @@ always @(*) begin
     state_nxt = state;
     case (state)
         ST_IDLE     : if (start)                        state_nxt = ST_WAIT_WFI;
-        ST_WAIT_WFI : if (!int_en_s)                    state_nxt = ST_IDLE;      // SW 取消
+        ST_WAIT_WFI : if (!int_en_s)                    state_nxt = ST_IDLE;      // SW cancel
                       else if (wfi_all && cnt_hit)      state_nxt = ST_CLK_OFF;
         ST_CLK_OFF  : if (clk_off_ok && cnt_hit)        state_nxt = ST_PD;
         ST_PD       :                                   state_nxt = ST_APPLY;
@@ -561,14 +561,14 @@ always @(posedge CLK or negedge RSTJ)
     if (!RSTJ)       mode_l <= {N_PORT{1'b0}};
     else if (start)  mode_l <= DFS_MODE;
 
-// 通用计数器: 进入状态时装载, 状态内递减到 0
+// shared counter: loaded on state entry, counts down to 0 within the state
 always @(posedge CLK or negedge RSTJ) begin
     if (!RSTJ)
         cnt <= {CNT_W{1'b0}};
     else begin
         case (state)
             ST_IDLE     : cnt <= WFI_STABLE_CYC - 1;
-            ST_WAIT_WFI : if (!wfi_all)               cnt <= WFI_STABLE_CYC - 1;   // WFI 需连续保持
+            ST_WAIT_WFI : if (!wfi_all)               cnt <= WFI_STABLE_CYC - 1;   // WFI must stay high continuously
                           else if (!cnt_hit)          cnt <= cnt - 1'b1;
                           else                        cnt <= CLK_SW_CYC - 1;
             ST_CLK_OFF  : if (!cnt_hit)               cnt <= cnt - 1'b1;
@@ -577,7 +577,7 @@ always @(posedge CLK or negedge RSTJ) begin
                           else                        cnt <= SETTLE_CYC + LOCK_STABLE_CYC - 1;
             ST_WAIT_LOCK: if (lock_ok || tmo_hit)     cnt <= CLK_SW_CYC - 1;
                           else if (cnt < LOCK_STABLE_CYC && !lock_s)
-                                                      cnt <= LOCK_STABLE_CYC - 1;  // LOCK 需连续保持
+                                                      cnt <= LOCK_STABLE_CYC - 1;  // LOCK must stay high continuously
                           else if (!cnt_hit)          cnt <= cnt - 1'b1;
             ST_CLK_ON   : if (!cnt_hit)               cnt <= cnt - 1'b1;
             default     : cnt <= {CNT_W{1'b0}};
@@ -585,7 +585,7 @@ always @(posedge CLK or negedge RSTJ) begin
     end
 end
 
-// LOCK 超时计数
+// LOCK timeout counter
 always @(posedge CLK or negedge RSTJ)
     if (!RSTJ)                        tmo_cnt <= {CNT_W{1'b0}};
     else if (state != ST_WAIT_LOCK)   tmo_cnt <= tmo_en ? LOCK_TIMEOUT_CYC - 1 : 0;
@@ -593,7 +593,7 @@ always @(posedge CLK or negedge RSTJ)
 
 wire timeout_now = (state == ST_WAIT_LOCK) && tmo_hit && !lock_ok;
 
-// port 控制: CLK_OFF 时按 mode 切 24M / gate; CLK_ON 时恢复 (超时则切 24M 的 port 保持 24M)
+// port control: CLK_OFF switches to 24M / gates per mode; CLK_ON restores (on timeout, 24M-mode ports stay on 24M)
 always @(posedge CLK or negedge RSTJ) begin
     if (!RSTJ) begin
         SEL_24M <= {N_PORT{1'b0}};
@@ -609,10 +609,10 @@ always @(posedge CLK or negedge RSTJ) begin
     end
 end
 
-// pd=1 之后一拍加载配置
+// load config one cycle after pd=1
 assign CFG_LOAD = (state == ST_PD);
 
-// pd: 进入 PD 时拉高, 加载后保持 PD_CYC 周期, 进入 WAIT_LOCK 时释放
+// pd: set on entering PD, held PD_CYC cycles after load, released on entering WAIT_LOCK
 always @(posedge CLK or negedge RSTJ)
     if (!RSTJ) PLL_PD <= 1'b0;
     else       PLL_PD <= (state_nxt == ST_PD) || (state_nxt == ST_APPLY);
@@ -636,7 +636,7 @@ always @(posedge CLK or negedge RSTJ) begin
     end
 end
 
-// 中断: port 恢复后置位, INT_EN 清 0 清除
+// interrupt: set after ports are restored, cleared by INT_EN = 0
 always @(posedge CLK or negedge RSTJ)
     if (!RSTJ)                              LOCK_INT <= 1'b0;
     else if (!int_en_s)                     LOCK_INT <= 1'b0;
@@ -646,7 +646,7 @@ endmodule
 
 
 //==============================================================================
-// 2 级同步器 (综合时可替换为工艺库标准同步单元)
+// 2-stage synchronizer (replace with the library sync cell in synthesis)
 //==============================================================================
 module PLL_DFS_SYNC2 #(
     parameter RST_VAL = 1'b0
