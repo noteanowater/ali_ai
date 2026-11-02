@@ -8,7 +8,7 @@
 //         1.2 PLL_SYS_DFS_MODE[1:0]: during DFS, port0(F600) / port1(F400) switches to 24M (1) or is gated (0)
 //         1.3 PLL_SYS_INT_EN = 1 (rising edge starts DFS)
 //   SW 2. CPU (both cores) enters WFI
-//   HW 3. Wait until CORE_WFI_MODE_0 / CORE_WFI_MODE_1 are both 1 and stable for 2 cycles
+//   HW 3. Wait until both cores are in WFI (CORE_WFI_MODE_0 / CORE_WFI_MODE_1, see DFS_WFI_PULSE)
 //   HW 4. Per PLL_SYS_DFS_MODE, switch port0/1 to 24M (clk_switch_2to1) or gate it (P_CLK_GATE)
 //   HW 5. power down PLL_SYS (pd=1)
 //   HW 6. Load PLL_SYS_CFG_0/1/2 into PLL_SYS
@@ -22,13 +22,22 @@
 //   PLL_SYS_LOCK_TIMEOUT is set and the interrupt is raised
 //   The original PLL_SYS_CFG_EN rising-edge immediate load path is kept; DFS is disabled in TEST_MODE / MBIST_ES_MODE
 //   PLL_SYS_CLK must be free-running (DFS FSM / pd counter / clk_switch select registers)
+//
+//   CORE_WFI_MODE_0/1 CDC (CORE_CLK -> PLL_SYS_CLK):
+//     DFS_WFI_PULSE = 1: WFI may be a pulse (>= 1 CORE_CLK cycle) or a level. While PLL_SYS_INT_EN is 1,
+//                        each WFI is captured into a sticky flag in the CORE_CLK domain, then synced to
+//                        PLL_SYS_CLK. Flags clear when PLL_SYS_INT_EN = 0. SW must make sure PLL_SYS_INT_EN = 1
+//                        has reached the shell before WFI (e.g. read it back, then DSB), and that no other
+//                        interrupt wakes a core before DFS completes.
+//     DFS_WFI_PULSE = 0: WFI is a level, synced directly and required stable for 2 PLL_SYS_CLK cycles.
 //==============================================================================
 module PLL_SYS_SHELL #(
     parameter DFS_PD_CYC           = 100,  // pd hold cycles after config load (>=1us, same as PLL_PD_GEN)
     parameter DFS_CLK_SW_CYC       = 16,   // clk_switch_2to1 switch wait cycles (PLL_SYS_CLK)
     parameter DFS_SETTLE_CYC       = 16,   // wait cycles after power up before checking LOCK
     parameter DFS_LOCK_STABLE_CYC  = 8,    // cycles LOCK must stay high continuously
-    parameter DFS_LOCK_TIMEOUT_CYC = 0     // LOCK timeout cycles (0: no timeout)
+    parameter DFS_LOCK_TIMEOUT_CYC = 0,    // LOCK timeout cycles (0: no timeout)
+    parameter DFS_WFI_PULSE        = 1     // 1: CORE_WFI_MODE_* may be pulses (sticky capture), 0: levels only
 )(
     output wire        PLL_SYS_F600_CLK      ,
     output wire        PLL_SYS_F400_CLK      ,
@@ -53,6 +62,7 @@ module PLL_SYS_SHELL #(
     input  wire        PLL_SYS_INT_EN        , // SCU PLL_INT_EN: rising edge starts DFS, 0 clears the interrupt
     input  wire        CORE_WFI_MODE_0       , // u_a45_top.core_wfi_mode_0
     input  wire        CORE_WFI_MODE_1       , // u_a45_top.core_wfi_mode_1
+    input  wire        CORE_CLK              , // clock driving CORE_WFI_MODE_0/1 (A45 core clock)
     output wire        PLL_SYS_LOCK_INT      , // -> A45_INT[30]
     output wire        PLL_SYS_DFS_BUSY      , // status, may connect to SCU read-only registers
     output wire        PLL_SYS_DFS_DONE      ,
@@ -391,7 +401,8 @@ PLL_SYS_DFS_CTRL #(
     .CLK_SW_CYC         (DFS_CLK_SW_CYC      ),
     .SETTLE_CYC         (DFS_SETTLE_CYC      ),
     .LOCK_STABLE_CYC    (DFS_LOCK_STABLE_CYC ),
-    .LOCK_TIMEOUT_CYC   (DFS_LOCK_TIMEOUT_CYC)
+    .LOCK_TIMEOUT_CYC   (DFS_LOCK_TIMEOUT_CYC),
+    .WFI_PULSE          (DFS_WFI_PULSE       )
 ) U_PLL_SYS_DFS_CTRL (
     .CLK                (PLL_SYS_CLK         ),
     .RSTJ               (PLL_SYS_RSTJ        ),
@@ -399,6 +410,7 @@ PLL_SYS_DFS_CTRL #(
     .DFS_MODE           (PLL_SYS_DFS_MODE    ),
     .CORE_WFI_MODE_0    (CORE_WFI_MODE_0     ),
     .CORE_WFI_MODE_1    (CORE_WFI_MODE_1     ),
+    .CORE_CLK           (CORE_CLK            ),
     .PLL_LOCK           (PLL_SYS_LOCK        ),
     .SEL_24M            (PLL_SYS_DFS_SEL_24M ),
     .GATE_EN            (PLL_SYS_DFS_GATE_EN ),
@@ -456,7 +468,7 @@ endmodule
 // PLL_SYS_DFS_CTRL: DFS FSM (CLK is the free-running PLL_SYS_CLK)
 //
 //   IDLE     --INT_EN rise, latch DFS_MODE-->
-//   WAIT_WFI --both cores in WFI for WFI_STABLE_CYC--> (INT_EN cleared in WAIT_WFI returns to IDLE)
+//   WAIT_WFI --both cores in WFI (stable WFI_STABLE_CYC)--> (INT_EN cleared in WAIT_WFI returns to IDLE)
 //   CLK_OFF  : MODE=1 ports switch to 24M, MODE=0 ports are gated; wait gate handshake & CLK_SW_CYC
 //   PD       : pd=1
 //   APPLY    : CFG_LOAD, hold pd for PD_CYC
@@ -472,7 +484,8 @@ module PLL_SYS_DFS_CTRL #(
     parameter CLK_SW_CYC       = 16,     // clk_switch switch wait cycles (>=1)
     parameter SETTLE_CYC       = 16,     // wait cycles after power up before checking LOCK
     parameter LOCK_STABLE_CYC  = 8,      // cycles LOCK must stay high continuously (>=1)
-    parameter LOCK_TIMEOUT_CYC = 0       // LOCK timeout cycles (0: no timeout)
+    parameter LOCK_TIMEOUT_CYC = 0,      // LOCK timeout cycles (0: no timeout)
+    parameter WFI_PULSE        = 1       // 1: CORE_WFI_MODE_* may be pulses (sticky capture), 0: levels only
 )(
     input  wire              CLK            ,
     input  wire              RSTJ           ,
@@ -480,6 +493,7 @@ module PLL_SYS_DFS_CTRL #(
     input  wire [N_PORT-1:0] DFS_MODE       ,  // 1: switch to 24M during DFS, 0: gate during DFS
     input  wire              CORE_WFI_MODE_0,
     input  wire              CORE_WFI_MODE_1,
+    input  wire              CORE_CLK       ,  // clock of CORE_WFI_MODE_0/1
     input  wire              PLL_LOCK       ,
     output reg  [N_PORT-1:0] SEL_24M        ,  // clk_switch select (1: 24M)
     output reg  [N_PORT-1:0] GATE_EN        ,  // ICG request (1: on)
@@ -512,10 +526,27 @@ wire [N_PORT-1:0] gate_fb_s;
 reg               int_en_s_d;
 
 PLL_DFS_SYNC2 U_SYNC_INTEN (.CLK(CLK), .RSTJ(RSTJ), .D(INT_EN         ), .Q(int_en_s));
-PLL_DFS_SYNC2 U_SYNC_WFI0  (.CLK(CLK), .RSTJ(RSTJ), .D(CORE_WFI_MODE_0), .Q(wfi0_s  ));
-PLL_DFS_SYNC2 U_SYNC_WFI1  (.CLK(CLK), .RSTJ(RSTJ), .D(CORE_WFI_MODE_1), .Q(wfi1_s  ));
 PLL_DFS_SYNC2 U_SYNC_LOCK  (.CLK(CLK), .RSTJ(RSTJ), .D(PLL_LOCK       ), .Q(lock_s  ));
 
+// WFI CDC: CORE_CLK (fast) -> CLK (slow)
+generate
+    if (WFI_PULSE) begin : G_WFI_PULSE
+        // sticky capture in CORE_CLK domain, armed by INT_EN, so a 1-cycle pulse is never missed
+        wire       arm_c;
+        reg  [1:0] wfi_seen;
+        PLL_DFS_SYNC2 U_SYNC_ARM (.CLK(CORE_CLK), .RSTJ(RSTJ), .D(INT_EN), .Q(arm_c));
+        always @(posedge CORE_CLK or negedge RSTJ)
+            if (!RSTJ)       wfi_seen <= 2'b00;
+            else if (!arm_c) wfi_seen <= 2'b00;
+            else             wfi_seen <= wfi_seen | {CORE_WFI_MODE_1, CORE_WFI_MODE_0};
+        PLL_DFS_SYNC2 U_SYNC_WFI0 (.CLK(CLK), .RSTJ(RSTJ), .D(wfi_seen[0]), .Q(wfi0_s));
+        PLL_DFS_SYNC2 U_SYNC_WFI1 (.CLK(CLK), .RSTJ(RSTJ), .D(wfi_seen[1]), .Q(wfi1_s));
+    end
+    else begin : G_WFI_LEVEL
+        PLL_DFS_SYNC2 U_SYNC_WFI0 (.CLK(CLK), .RSTJ(RSTJ), .D(CORE_WFI_MODE_0), .Q(wfi0_s));
+        PLL_DFS_SYNC2 U_SYNC_WFI1 (.CLK(CLK), .RSTJ(RSTJ), .D(CORE_WFI_MODE_1), .Q(wfi1_s));
+    end
+endgenerate
 genvar i;
 generate
     for (i = 0; i < N_PORT; i = i + 1) begin : G_FB_SYNC

@@ -62,14 +62,20 @@ reg  [1:0] mode = 0;
 wire f600, f400, lock, irq, busy, done, tmo;
 integer err = 0;
 
-PLL_SYS_SHELL #(.DFS_LOCK_TIMEOUT_CYC(2000)) dut (
+`ifdef WFI_LEVEL
+localparam WFI_PULSE = 0;
+`else
+localparam WFI_PULSE = 1;
+`endif
+
+PLL_SYS_SHELL #(.DFS_LOCK_TIMEOUT_CYC(2000), .DFS_WFI_PULSE(WFI_PULSE)) dut (
     .PLL_SYS_F600_CLK(f600), .PLL_SYS_F400_CLK(f400), .PLL_SYS_LOCK(lock),
     .PLL_SYS_TESTOUT(), .PLL_SYS_TBLADDR(), .PLL_SYS_TEST_DIV1_CLK(), .PLL_SYS_TEST_DIV2_CLK(),
     .PLL_SYS_SCAN_DIV1_CLK(), .PLL_SYS_SCAN_DIV2_CLK(),
     .PLL_SYS_CLK_DIV1(8'h3b), .PLL_SYS_CLK_DIV2(8'h27),
     .PLL_SYS_CFG_0(cfg0), .PLL_SYS_CFG_1(cfg1), .PLL_SYS_CFG_2(cfg2), .PLL_SYS_CFG_EN(cfg_en),
     .PLL_SYS_DFS_MODE(mode), .PLL_SYS_INT_EN(int_en),
-    .CORE_WFI_MODE_0(wfi0), .CORE_WFI_MODE_1(wfi1),
+    .CORE_WFI_MODE_0(wfi0), .CORE_WFI_MODE_1(wfi1), .CORE_CLK(f600),
     .PLL_SYS_LOCK_INT(irq), .PLL_SYS_DFS_BUSY(busy), .PLL_SYS_DFS_DONE(done), .PLL_SYS_LOCK_TIMEOUT(tmo),
     .DFT_CPU_SPEED_SEL(2'b00), .MBIST_ES_MODE(1'b0), .TEST_MODE(1'b0),
     .OSC_24M_CLK(osc), .PLL_SYS_CLK(osc), .PLL_DFT_RSTJ(1'b1), .PLL_SYS_RSTJ(rstj));
@@ -134,11 +140,24 @@ begin
 end
 endtask
 
+// WFI as a 1-cycle pulse in the CPU clock (F600) domain
+task wfi_pulse(input integer core);
+begin
+    @(posedge f600) #0.1; if (core == 0) wfi0 = 1; else wfi1 = 1;
+    @(posedge f600) #0.1; if (core == 0) wfi0 = 0; else wfi1 = 0;
+end
+endtask
+
+reg pulse_mode = 0;
 task dfs(input [1:0] md, input [11:0] ni, input [4:0] m, input [2:0] q0, input [2:0] q1);
 begin
     set_cfg(ni, m, q0, q1); mode = md;       // SW 1.1 / 1.2
     #100 int_en = 1;                         // SW 1.3
-    #500 wfi0 = 1; #300 wfi1 = 1;            // SW 2: WFI
+    if (pulse_mode) begin                    // SW 2: WFI
+        #500 wfi_pulse(0); #300 wfi_pulse(1);
+    end else begin
+        #500 wfi0 = 1; #300 wfi1 = 1;
+    end
     wait (irq); wait (!irq);
     #500;
     if (busy || !done) begin err = err + 1; $display("ERR: state after dfs"); end
@@ -168,6 +187,21 @@ initial begin
     dut.U_PLL_SYS.lock_block = 0;
     dfs(2'b01, 12'd333, 5'd4, 3'd3, 3'd4);   // recover with another DFS
     measure(499.5, 399.6);
+
+    if (WFI_PULSE) begin
+        // WFI as 1-cycle pulses (fast -> slow CDC)
+        pulse_mode = 1;
+        dfs(2'b00, 12'd399, 5'd4, 3'd3, 3'd5);
+        measure(598.5, 399.0);
+        // a WFI pulse before INT_EN must be ignored: only core1 pulses after arming -> no DFS
+        set_cfg(12'd333, 5'd4, 3'd3, 3'd4);
+        wfi_pulse(0); #500 int_en = 1; #500 wfi_pulse(1); #5000;
+        if (dut.U_PLL_SYS_DFS_CTRL.state > 1 || dut.PLL_SYS_FBDIV_REG != 399) begin err = err + 1; $display("ERR: pre-arm WFI pulse not ignored"); end
+        wfi_pulse(0); wait (irq); wait (!irq); #500;   // core0 WFI after arming completes it
+        if (dut.PLL_SYS_FBDIV_REG != 333) begin err = err + 1; $display("ERR: dfs after pre-arm test"); end
+        measure(499.5, 399.6);
+        pulse_mode = 0;
+    end
 
     // WFI without INT_EN does not trigger DFS
     set_cfg(12'd399, 5'd4, 3'd3, 3'd5);
