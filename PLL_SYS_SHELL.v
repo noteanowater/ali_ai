@@ -313,6 +313,8 @@ wire PLL_SYS_PD_ALL = PLL_SYS_PD | (PLL_SYS_DFS_PD & ~(TEST_MODE | MBIST_ES_MODE
 
 wire PLL_SYS_F600_OUT_CLK ;
 wire PLL_SYS_F400_OUT_CLK ;
+wire PLL_SYS_F600_LCK_CLK ;
+wire PLL_SYS_F400_LCK_CLK ;
 
 INNO_PLL_TOP U_PLL_SYS(
 //u_pll_cpu (
@@ -360,14 +362,14 @@ end
 SRCKBUF  U_PLL_SYS_SCAN_DIV1_CLK_BUF(.Z(PLL_SYS_SCAN_DIV1_CLK), .I(PLL_SYS_F600_CLK));
 SRCKBUF  U_PLL_SYS_SCAN_DIV2_CLK_BUF(.Z(PLL_SYS_SCAN_DIV2_CLK), .I(PLL_SCAN_DIV2_CLK_REG));
 
-clk_div_256 U_PLL_SYS_TEST_DIV1 (.clk(PLL_SYS_F600_OUT_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV1_REG), .clk_o(PLL_SYS_TEST_DIV1_CLK));
-clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_OUT_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV2_REG), .clk_o(PLL_SYS_TEST_DIV2_CLK));
+clk_div_256 U_PLL_SYS_TEST_DIV1 (.clk(PLL_SYS_F600_LCK_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV1_REG), .clk_o(PLL_SYS_TEST_DIV1_CLK));
+clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_LCK_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV2_REG), .clk_o(PLL_SYS_TEST_DIV2_CLK));
 
 
 //------------------------------------------------------------------------------
 // DFS port0/1 clock path (port0 = A45 core clock):
 //
-//   PLL clko --GATE--> PLL_SYS_A45_CLK --+--> A45_CORE_CLK_DIV --> CORE_A45_DIV_CLK --+
+//   PLL clko --LOCK gate--GATE--> PLL_SYS_A45_CLK --+--> A45_CORE_CLK_DIV --> CORE_A45_DIV_CLK --+
 //                                        |                                            |
 //                                        +--------------------------------------------+--> Glitch-Free-MUX (A45_SRC_CLK_SEL)
 //                                                                                              |
@@ -393,11 +395,23 @@ wire [1:0] PLL_SYS_DIV2_SEL_DFT = (TEST_MODE | MBIST_ES_MODE) ? 2'b00 : PLL_SYS_
 wire       PLL_SYS_A45_CLK      ;
 wire       PLL_SYS_F400_G_CLK   ;
 
-PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F600_GATE_SYNC (.CLK(PLL_SYS_F600_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN   ), .Q(PLL_SYS_F600_GATE_EN));
-PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F400_GATE_SYNC (.CLK(PLL_SYS_F400_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN   ), .Q(PLL_SYS_F400_GATE_EN));
+// Lock gate : PLL clko is X / unstable while the PLL is powered down or unlocked (e.g. during reset).
+//   1) PLL_SYS_*_LCK_CLK = clko & LOCK : blocks X and stops the clock while unlocked (TODO: library clock AND cell)
+//   2) the ICG enable also needs LOCK synced into the clock domain (reset 0), so the truncated pulse at the
+//      LOCK rising edge never passes; only clean pulses after 2 locked cycles reach the gate output
+wire PLL_SYS_LOCK_DFT = PLL_SYS_LOCK | TEST_MODE | MBIST_ES_MODE ;
+wire PLL_SYS_F600_LOCK_S ;
+wire PLL_SYS_F400_LOCK_S ;
+assign PLL_SYS_F600_LCK_CLK = PLL_SYS_F600_OUT_CLK & PLL_SYS_LOCK_DFT ;
+assign PLL_SYS_F400_LCK_CLK = PLL_SYS_F400_OUT_CLK & PLL_SYS_LOCK_DFT ;
 
-P_CLK_GATE U_PLL_SYS_F600_CLK_GATE (.CLK(PLL_SYS_F600_OUT_CLK), .EN(PLL_SYS_F600_GATE_EN), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_A45_CLK   ));
-P_CLK_GATE U_PLL_SYS_F400_CLK_GATE (.CLK(PLL_SYS_F400_OUT_CLK), .EN(PLL_SYS_F400_GATE_EN), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_F400_G_CLK));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F600_GATE_SYNC (.CLK(PLL_SYS_F600_LCK_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN   ), .Q(PLL_SYS_F600_GATE_EN));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F400_GATE_SYNC (.CLK(PLL_SYS_F400_LCK_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN   ), .Q(PLL_SYS_F400_GATE_EN));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b0)) U_PLL_SYS_F600_LOCK_SYNC (.CLK(PLL_SYS_F600_LCK_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_LOCK_DFT      ), .Q(PLL_SYS_F600_LOCK_S ));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b0)) U_PLL_SYS_F400_LOCK_SYNC (.CLK(PLL_SYS_F400_LCK_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_LOCK_DFT      ), .Q(PLL_SYS_F400_LOCK_S ));
+
+P_CLK_GATE U_PLL_SYS_F600_CLK_GATE (.CLK(PLL_SYS_F600_LCK_CLK), .EN(PLL_SYS_F600_GATE_EN & PLL_SYS_F600_LOCK_S), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_A45_CLK   ));
+P_CLK_GATE U_PLL_SYS_F400_CLK_GATE (.CLK(PLL_SYS_F400_LCK_CLK), .EN(PLL_SYS_F400_GATE_EN & PLL_SYS_F400_LOCK_S), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_F400_G_CLK));
 
 // ---------------- /2 divider ----------------
 wire       CORE_A45_DIV_CLK     ;
@@ -655,7 +669,7 @@ always @(posedge CLK or negedge RSTJ)
 wire START      = INT_EN_S & ~INT_EN_S_D;
 wire WFI_ALL    = WFI0_S & WFI1_S;
 wire CLK_OFF_OK = !PLL_UPD_L || !(|GATE_FB_S);  // PLL_UPD: GATE closed in all port clock domains
-wire CLK_ON_OK  = &GATE_FB_S;                   // GATE open in all port clock domains
+wire CLK_ON_OK  = (&GATE_FB_S) | LOCK_TIMEOUT;  // GATE open in all port clock domains (no PLL clock after LOCK timeout)
 
 wire CNT_HIT    = (CNT == {CNT_W{1'b0}});
 wire TMO_EN     = (LOCK_TIMEOUT_CYC != 0);

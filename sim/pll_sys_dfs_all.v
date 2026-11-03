@@ -78,7 +78,7 @@ endmodule
 //==============================================================================
 `ifndef USE_PLL_MODEL
 // PLL model: Fvco = 24 * NI / M, clko0 = Fvco / (Q0_0+1), clko1 = Fvco / (Q0_1+1)
-// pd=1 stops output and drops lock; locks LOCK_T after pd release (never locks when lock_block=1)
+// pd=1 drives X on the outputs and drops lock; locks LOCK_T after pd release (never locks when lock_block=1)
 module INNO_PLL_TOP (
     output [7:0] tbladdr, output reg lock, output testout, output reg clko0, output reg clko1,
     input refclk, input pd, input [4:0] prediv, input [11:0] fbdiv, input [23:0] frac,
@@ -90,7 +90,7 @@ parameter real LOCK_T = 2000.0;
 reg lock_block = 0;
 assign tbladdr = 8'd0; assign testout = 1'b0;
 real fvco, h0 = 1.0, h1 = 1.0;
-initial begin lock = 0; clko0 = 0; clko1 = 0; end
+initial begin lock = 0; clko0 = 1'bx; clko1 = 1'bx; end
 always @(posedge pd) lock = 0;
 always @(negedge pd) begin
     fvco = 24.0 * fbdiv / prediv;
@@ -98,8 +98,9 @@ always @(negedge pd) begin
     h1 = 1000.0 / (fvco / (postdiv0_1 + 1)) / 2.0;
     #(LOCK_T) if (!pd && !lock_block) lock = 1;
 end
-always #(h0) if (!pd) clko0 = ~clko0; else clko0 = 0;
-always #(h1) if (!pd) clko1 = ~clko1; else clko1 = 0;
+// like the real model: outputs are X while powered down
+always #(h0) if (!pd) clko0 = (clko0 === 1'b1) ? 1'b0 : 1'b1; else clko0 = 1'bx;
+always #(h1) if (!pd) clko1 = (clko1 === 1'b1) ? 1'b0 : 1'b1; else clko1 = 1'bx;
 endmodule
 `endif
 
@@ -116,9 +117,9 @@ endmodule
 //   SW : ISR writes 1 to the interrupt status (W1C, PLL_SYS_INT_CLR); PLL_SYS_INT_EN = 0 after boot
 //
 // Clock path:
-//   A45 : PLL clko0 -> GATE -> STATIC_CLK_DIV /2 -+-> CLK_SWITCH_2MUX1 (/2 or /1) -> CLK_SWITCH_2MUX1 (PLL / 24M) -> PLL_SYS_F600_CLK
-//                         `-----------------------'
-//   F400: PLL clko1 -> GATE -> CLK_SWITCH_2MUX1 (PLL / 24M) -> PLL_SYS_F400_CLK
+//   A45 : PLL clko0 -> LOCK gate -> GATE -> STATIC_CLK_DIV /2 -+-> CLK_SWITCH_2MUX1 (/2 or /1) -> CLK_SWITCH_2MUX1 (PLL / 24M) -> PLL_SYS_F600_CLK
+//                                      `-----------------------'
+//   F400: PLL clko1 -> LOCK gate -> GATE -> CLK_SWITCH_2MUX1 (PLL / 24M) -> PLL_SYS_F400_CLK
 //==============================================================================
 module PLL_SYS_SHELL #(
     parameter DFS_PD_CYC           = 100,  // pd hold cycles after config load (>=1us, same as PLL_PD_GEN)
@@ -439,6 +440,8 @@ PLL_SYS_DFS_CTRL #(
 
 wire PLL_SYS_F600_OUT_CLK ;
 wire PLL_SYS_F400_OUT_CLK ;
+wire PLL_SYS_F600_LCK_CLK ;
+wire PLL_SYS_F400_LCK_CLK ;
 
 INNO_PLL_TOP U_PLL_SYS(
 //u_pll_cpu (
@@ -486,18 +489,30 @@ end
 SRCKBUF  U_PLL_SYS_SCAN_DIV1_CLK_BUF(.Z(PLL_SYS_SCAN_DIV1_CLK), .I(PLL_SYS_F600_CLK));
 SRCKBUF  U_PLL_SYS_SCAN_DIV2_CLK_BUF(.Z(PLL_SYS_SCAN_DIV2_CLK), .I(PLL_SCAN_DIV2_CLK_REG));
 
-clk_div_256 U_PLL_SYS_TEST_DIV1 (.clk(PLL_SYS_F600_OUT_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV1_REG), .clk_o(PLL_SYS_TEST_DIV1_CLK));
-clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_OUT_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV2_REG), .clk_o(PLL_SYS_TEST_DIV2_CLK));
+clk_div_256 U_PLL_SYS_TEST_DIV1 (.clk(PLL_SYS_F600_LCK_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV1_REG), .clk_o(PLL_SYS_TEST_DIV1_CLK));
+clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_LCK_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV2_REG), .clk_o(PLL_SYS_TEST_DIV2_CLK));
 
-// Gate : one common enable from the DFS FSM (0 only around PLL power down), synced into each PLL clko domain
+// Lock gate : PLL clko is X / unstable while the PLL is powered down or unlocked (e.g. during reset).
+//   1) PLL_SYS_*_LCK_CLK = clko & LOCK : blocks X and stops the clock while unlocked (TODO: library clock AND cell)
+//   2) the ICG enable also needs LOCK synced into the clock domain (reset 0), so the truncated pulse at the
+//      LOCK rising edge never passes; only clean pulses after 2 locked cycles reach the gate output
+wire PLL_SYS_LOCK_DFT = PLL_SYS_LOCK | TEST_MODE | MBIST_ES_MODE ;
+assign PLL_SYS_F600_LCK_CLK = PLL_SYS_F600_OUT_CLK & PLL_SYS_LOCK_DFT ;
+assign PLL_SYS_F400_LCK_CLK = PLL_SYS_F400_OUT_CLK & PLL_SYS_LOCK_DFT ;
+
+// Gate : one common enable from the DFS FSM (0 only around PLL power down) & LOCK, synced into each clock domain
 wire PLL_SYS_A45_GAT_CLK  ;
 wire PLL_SYS_F400_GAT_CLK ;
+wire PLL_SYS_F600_LOCK_S  ;
+wire PLL_SYS_F400_LOCK_S  ;
 
-PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F600_GATE_SYNC (.CLK(PLL_SYS_F600_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN), .Q(PLL_SYS_F600_GATE_EN));
-PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F400_GATE_SYNC (.CLK(PLL_SYS_F400_OUT_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN), .Q(PLL_SYS_F400_GATE_EN));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F600_GATE_SYNC (.CLK(PLL_SYS_F600_LCK_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN), .Q(PLL_SYS_F600_GATE_EN));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b1)) U_PLL_SYS_F400_GATE_SYNC (.CLK(PLL_SYS_F400_LCK_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_DFS_GATE_EN), .Q(PLL_SYS_F400_GATE_EN));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b0)) U_PLL_SYS_F600_LOCK_SYNC (.CLK(PLL_SYS_F600_LCK_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_LOCK_DFT   ), .Q(PLL_SYS_F600_LOCK_S ));
+PLL_DFS_SYNC2 #(.RST_VAL(1'b0)) U_PLL_SYS_F400_LOCK_SYNC (.CLK(PLL_SYS_F400_LCK_CLK), .RSTJ(PLL_SYS_RSTJ), .D(PLL_SYS_LOCK_DFT   ), .Q(PLL_SYS_F400_LOCK_S ));
 
-P_CLK_GATE U_PLL_SYS_F600_CLK_GATE (.CLK(PLL_SYS_F600_OUT_CLK), .EN(PLL_SYS_F600_GATE_EN), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_A45_GAT_CLK ));
-P_CLK_GATE U_PLL_SYS_F400_CLK_GATE (.CLK(PLL_SYS_F400_OUT_CLK), .EN(PLL_SYS_F400_GATE_EN), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_F400_GAT_CLK));
+P_CLK_GATE U_PLL_SYS_F600_CLK_GATE (.CLK(PLL_SYS_F600_LCK_CLK), .EN(PLL_SYS_F600_GATE_EN & PLL_SYS_F600_LOCK_S), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_A45_GAT_CLK ));
+P_CLK_GATE U_PLL_SYS_F400_CLK_GATE (.CLK(PLL_SYS_F400_LCK_CLK), .EN(PLL_SYS_F400_GATE_EN & PLL_SYS_F400_LOCK_S), .SE(TEST_MODE|MBIST_ES_MODE), .YGCLK  (PLL_SYS_F400_GAT_CLK));
 
 //========================================================
 // PLL_A45
@@ -712,7 +727,7 @@ always @(posedge CLK or negedge RSTJ)
 wire START      = INT_EN_S & ~INT_EN_S_D;
 wire WFI_ALL    = WFI0_S & WFI1_S;
 wire CLK_OFF_OK = !PLL_UPD_L || !(|GATE_FB_S);  // PLL_UPD: GATE closed in all port clock domains
-wire CLK_ON_OK  = &GATE_FB_S;                   // GATE open in all port clock domains
+wire CLK_ON_OK  = (&GATE_FB_S) | LOCK_TIMEOUT;  // GATE open in all port clock domains (no PLL clock after LOCK timeout)
 
 wire CNT_HIT    = (CNT == {CNT_W{1'b0}});
 wire TMO_EN     = (LOCK_TIMEOUT_CYC != 0);
@@ -969,6 +984,10 @@ end
 always @(f600) begin if (rstj && e600 != 0 && $realtime - e600 < 0.75) begin err = err + 1; $display("ERR: F600 glitch @%0t", $time); end e600 = $realtime; end
 always @(f400) begin if (rstj && e400 != 0 && $realtime - e400 < 0.75) begin err = err + 1; $display("ERR: F400 glitch @%0t", $time); end e400 = $realtime; end
 
+// 9) no X on the output clocks after reset (PLL outputs are X while powered down)
+always @(f600 or f400) if (rstj && ((f600 !== 1'b0 && f600 !== 1'b1) || (f400 !== 1'b0 && f400 !== 1'b1))) begin
+    err = err + 1; $display("ERR: X on output clock @%0t f600=%b f400=%b", $time, f600, f400); end
+
 // 6) PLL_UPD = 0: PLL must not be powered down and its config must not change
 always @(posedge dut.PLL_SYS_PD_ALL) if (rstj && busy && !dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin err = err + 1; $display("ERR: pd asserted with PLL_UPD=0"); end
 always @(dut.PLL_SYS_FBDIV_REG or dut.PLL_SYS_POSTDIV0_0_REG) if (rstj && busy && !dut.U_PLL_SYS_DFS_CTRL.PLL_UPD_L) begin err = err + 1; $display("ERR: PLL config changed with PLL_UPD=0"); end
@@ -1006,6 +1025,18 @@ always @(posedge irq) begin
     #300 if (irq) begin err = err + 1; $display("ERR: interrupt not cleared by W1C"); end
     #200 int_en = 0;
 end
+
+task measure_f600(input real exp600);
+real a, b;
+begin
+    @(posedge f600) a = $realtime; @(posedge f600) b = $realtime;
+    $display("  F600 = %0.1f MHz, F400 = (no clock)", 1000.0/(b-a));
+    if (1000.0/(b-a) < exp600-2 || 1000.0/(b-a) > exp600+2) begin err = err + 1; $display("ERR: freq"); end
+end
+endtask
+
+integer f400_edges = 0;
+always @(posedge f400) f400_edges = f400_edges + 1;
 
 task measure(input real exp600, input real exp400);
 real a, b, c, d;
@@ -1075,7 +1106,10 @@ initial begin
 `endif
     dfs(2'b01, 12'd399, 5'd4, 3'd3, 3'd5);
     if (!tmo) begin err = err + 1; $display("ERR: timeout flag"); end
-    $display("timeout:"); measure(24.0, 399.0);
+    // F600 (24M mode) runs at 24M; F400 (PLL path) has no clock because the PLL never locked
+    $display("timeout:"); measure_f600(24.0);
+    f400_edges = 0; #2000;
+    if (f400_edges != 0) begin err = err + 1; $display("ERR: F400 clock without PLL lock"); end
 `ifndef USE_PLL_MODEL
     dut.U_PLL_SYS.lock_block = 0;
 `else
