@@ -4,19 +4,24 @@
 //   div = 0        : clk_o = clk (bypass)
 //   div = 1~2^n-1  : clk_o = clk / (div+1), 50% duty for both odd and even ratios
 //
-//   Clock path: clk_o = clk_p | ICG(clk, gen_en)
-//     even ratio : gen_en stays 0, clk_o = clk_p
-//     odd ratio  : ICG adds the extra half cycle after clk_p
-//                  (ends on the clk falling edge)
-//     bypass     : clk_p stays 0, gen_en stays 1, clk_o = clk
+//   Clock path: clk_o = clk_p | (odd_fill | ICG(clk, gen_en))
+//     even ratio : only clk_p toggles (clocked by clk)
+//     odd ratio  : clk_p stays 0; ICG passes H+1 clk pulses and odd_fill
+//                  (clocked by the ICG output) fills the low phases between
+//                  them, so the output ends on a clk falling edge
+//     bypass     : clk_p / odd_fill stay 0, gen_en stays 1, clk_o = clk
+//
+//   odd_fill is clocked by the ICG output, so it can only change after the
+//   ICG output has risen: the handoff at the OR gate is race-free for any
+//   ICG delay (no clock gating check needed on the OR gates).
 //
 //   Backend / STA notes:
-//     1. Clock gating check on U_CLKDIV_OR2: in odd ratio mode the falling
-//        edge of clk_p must arrive after the rising edge of the ICG output
-//        (hold), otherwise clk_o glitches
-//     2. Set dont_touch on U_CLKDIV_ICG / U_CLKDIV_OR2
-//     3. DFT: ICG SE pin is connected during DFT insertion; clk_o needs
-//        DFT autofix (test clock mux)
+//     1. odd_fill D input (from clk domain) is captured by the ICG output:
+//        a normal clk -> gated-clk hold check, fixed by data-path buffering
+//     2. Set dont_touch on U_CLKDIV_ICG / U_CLKDIV_OR_ODD / U_CLKDIV_OR_OUT
+//     3. DFT: ICG SE pin must be connected to scan enable during DFT
+//        insertion (it clocks odd_fill); clk_o is replaced by TEST_CLK at
+//        the top-level test clock mux
 //==============================================================================
 module CLK_DIV(
       clk  ,
@@ -41,11 +46,13 @@ reg  [div_width-1:0] div_sync_2 ;
 reg  [div_width-1:0] div_sync   ;
 reg  [div_width-1:0] div_reg    ;
 reg  [div_width-1:0] cnt_p      ;
-reg                  clk_p      ;   // divided clock
+reg                  clk_p      ;   // even ratio divided clock
 reg                  gen_en     ;   // ICG enable
+reg                  odd_fill   ;   // odd ratio low-phase fill
 
 wire [div_width-1:0] half_div   ;   // = (div_reg+1)>>1, overflow-free
 wire                 clk_gate   ;
+wire                 clk_odd    ;
 
 assign half_div = (div_reg >> 1) + {{(div_width-1){1'b0}}, div_reg[0]};
 
@@ -96,16 +103,16 @@ always@(posedge clk or negedge rstn) begin
 end
 
 //------------------------------------------------------------
-// clk_p: set after cnt_p==0, cleared after cnt_p==half_div (clear wins)
-//   high for half_div clk cycles
-//   div_reg==0 -> half_div==0, clear always wins -> clk_p stays 0
+// clk_p (even ratio only, div_reg odd):
+//   set after cnt_p==0, cleared after cnt_p==half_div (clear wins)
+//   high for half_div clk cycles; stays 0 for odd ratio and bypass
 //------------------------------------------------------------
 always@(posedge clk or negedge rstn) begin
   if (~rstn)
     clk_p <= 1'b0;
   else if (cnt_p == half_div)
     clk_p <= 1'b0;
-  else if (cnt_p == {div_width{1'b0}})
+  else if ((cnt_p == {div_width{1'b0}}) && (div_reg[0] == 1'b1))
     clk_p <= 1'b1;
 end
 
@@ -115,9 +122,8 @@ end
 //   or an odd ratio (div even), i.e. div_sync[0]==0;
 //   cleared after cnt_p==half_div
 //   bypass     : every cycle is a period end -> stays 1
-//   odd ratio  : set one cycle before clk_p rises, cleared together with
-//                clk_p; the ICG pulses lag gen_en by one cycle, so the
-//                last pulse fills the half cycle after clk_p falls
+//   odd ratio  : high while cnt_p = 0 ~ half_div; the ICG latches it, so
+//                its pulses appear while cnt_p = 1 ~ half_div+1
 //   even ratio : stays 0
 //------------------------------------------------------------
 always@(posedge clk or negedge rstn) begin
@@ -130,18 +136,42 @@ always@(posedge clk or negedge rstn) begin
 end
 
 //------------------------------------------------------------
-// Clock path: clk_o = clk_p | ICG(clk, gen_en)
+// odd_fill (odd ratio): clocked by the ICG output
+//   ICG pulses at cnt_p = 1 ~ half_div+1:
+//     set   at the pulse of cnt_p = 1          (captures cnt_p == 0)
+//     clear at the pulse of cnt_p = half_div+1 (captures cnt_p == half_div)
+//   -> high from cnt_p = 1 to cnt_p = half_div, covering the clk low
+//      phases between ICG pulses; both edges happen while clk_gate is high
+//   bypass: half_div==0, clear always wins -> stays 0
+//------------------------------------------------------------
+always@(posedge clk_gate or negedge rstn) begin
+  if (~rstn)
+    odd_fill <= 1'b0;
+  else if (cnt_p == half_div)
+    odd_fill <= 1'b0;
+  else if (cnt_p == {div_width{1'b0}})
+    odd_fill <= 1'b1;
+end
+
+//------------------------------------------------------------
+// Clock path: clk_o = clk_p | (odd_fill | ICG(clk, gen_en))
 //------------------------------------------------------------
 P_CLK_GATE U_CLKDIV_ICG (
     .CLK   (clk     ),
     .EN    (gen_en  ),
-    .SE    (1'b0    ),   // connected during DFT insertion
+    .SE    (1'b0    ),   // connect to scan enable during DFT insertion
     .YGCLK (clk_gate)
 );
 
-OR2V2_8TR40 U_CLKDIV_OR2 (
-    .A1 (clk_p   ),
+OR2V2_8TR40 U_CLKDIV_OR_ODD (
+    .A1 (odd_fill),
     .A2 (clk_gate),
+    .Z  (clk_odd )
+);
+
+OR2V2_8TR40 U_CLKDIV_OR_OUT (
+    .A1 (clk_p   ),
+    .A2 (clk_odd ),
     .Z  (clk_o   )
 );
 
