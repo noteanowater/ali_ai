@@ -1,19 +1,22 @@
 //==============================================================================
-// CLK_DIV : 整数时钟分频器（只使用 posedge 触发器，无负沿触发器）
+// CLK_DIV : integer clock divider (posedge flops only, no negedge flops)
 //
-//   div = 0      : clk_o = clk (bypass)
-//   div = 1~2^n-1: clk_o = clk / (div+1)，奇偶分频均为 50% 占空比
+//   div = 0        : clk_o = clk (bypass)
+//   div = 1~2^n-1  : clk_o = clk / (div+1), 50% duty for both odd and even ratios
 //
-//   时钟路径：clk_o = clk_p | ICG(clk, gen_en)
-//     偶数分频 : gen_en 恒 0，clk_o = clk_p
-//     奇数分频 : ICG 补出 clk_p 之后的半个周期（在 clk 下降沿结束）
-//     bypass   : clk_p 恒 0，gen_en 恒 1，clk_o = clk
+//   Clock path: clk_o = clk_p | ICG(clk, gen_en)
+//     even ratio : gen_en stays 0, clk_o = clk_p
+//     odd ratio  : ICG adds the extra half cycle after clk_p
+//                  (ends on the clk falling edge)
+//     bypass     : clk_p stays 0, gen_en stays 1, clk_o = clk
 //
-//   后端/STA 注意：
-//     1. 对 U_CLKDIV_OR2 做 clock gating check：奇数分频时 clk_p 的下降沿
-//        必须晚于 ICG 输出的上升沿（hold），否则会有毛刺
-//     2. U_CLKDIV_ICG / U_CLKDIV_OR2 设置 dont_touch
-//     3. DFT：ICG 的 SE 由 DFT 插入时连接；clk_o 需要 DFT autofix（测试 mux）
+//   Backend / STA notes:
+//     1. Clock gating check on U_CLKDIV_OR2: in odd ratio mode the falling
+//        edge of clk_p must arrive after the rising edge of the ICG output
+//        (hold), otherwise clk_o glitches
+//     2. Set dont_touch on U_CLKDIV_ICG / U_CLKDIV_OR2
+//     3. DFT: ICG SE pin is connected during DFT insertion; clk_o needs
+//        DFT autofix (test clock mux)
 //==============================================================================
 module CLK_DIV(
       clk  ,
@@ -38,16 +41,16 @@ reg  [div_width-1:0] div_sync_2 ;
 reg  [div_width-1:0] div_sync   ;
 reg  [div_width-1:0] div_reg    ;
 reg  [div_width-1:0] cnt_p      ;
-reg                  clk_p      ;   // 分频主时钟
-reg                  gen_en     ;   // ICG 使能
+reg                  clk_p      ;   // divided clock
+reg                  gen_en     ;   // ICG enable
 
-wire [div_width-1:0] half_div   ;   // = (div_reg+1)>>1，无溢出写法
+wire [div_width-1:0] half_div   ;   // = (div_reg+1)>>1, overflow-free
 wire                 clk_gate   ;
 
 assign half_div = (div_reg >> 1) + {{(div_width-1){1'b0}}, div_reg[0]};
 
 //------------------------------------------------------------
-// div 同步
+// div synchronizer
 //------------------------------------------------------------
 always@(posedge clk or negedge rstn) begin
   if (~rstn)
@@ -71,7 +74,7 @@ always@(posedge clk or negedge rstn) begin
 end
 
 //------------------------------------------------------------
-// 分频比更新：只在一个分频周期结束时更新
+// Ratio update: only at the end of a divided period
 //------------------------------------------------------------
 always@(posedge clk or negedge rstn) begin
   if (~rstn)
@@ -81,7 +84,7 @@ always@(posedge clk or negedge rstn) begin
 end
 
 //------------------------------------------------------------
-// 计数器：0 ~ div_reg
+// Counter: 0 ~ div_reg
 //------------------------------------------------------------
 always@(posedge clk or negedge rstn) begin
   if (~rstn)
@@ -93,9 +96,9 @@ always@(posedge clk or negedge rstn) begin
 end
 
 //------------------------------------------------------------
-// clk_p：cnt_p==0 后置 1，cnt_p==half_div 后清 0（清零优先）
-//   高电平占 half_div 个 clk 周期
-//   div_reg==0 时 half_div==0，清零恒优先 -> clk_p 恒 0
+// clk_p: set after cnt_p==0, cleared after cnt_p==half_div (clear wins)
+//   high for half_div clk cycles
+//   div_reg==0 -> half_div==0, clear always wins -> clk_p stays 0
 //------------------------------------------------------------
 always@(posedge clk or negedge rstn) begin
   if (~rstn)
@@ -107,12 +110,15 @@ always@(posedge clk or negedge rstn) begin
 end
 
 //------------------------------------------------------------
-// gen_en：ICG 使能
-//   周期结束时，下一配置为 bypass(div=0) 或奇数分频(div 为偶数)，
-//   即 div_sync[0]==0 时置 1；cnt_p==half_div 后清 0
-//   bypass   ：每拍都是周期结束 -> 恒 1
-//   奇数分频 ：比 clk_p 早一拍置 1、晚一拍清 0
-//   偶数分频 ：恒 0
+// gen_en: ICG enable
+//   At the end of a period, set to 1 if the next setting is bypass (div=0)
+//   or an odd ratio (div even), i.e. div_sync[0]==0;
+//   cleared after cnt_p==half_div
+//   bypass     : every cycle is a period end -> stays 1
+//   odd ratio  : set one cycle before clk_p rises, cleared together with
+//                clk_p; the ICG pulses lag gen_en by one cycle, so the
+//                last pulse fills the half cycle after clk_p falls
+//   even ratio : stays 0
 //------------------------------------------------------------
 always@(posedge clk or negedge rstn) begin
   if (~rstn)
@@ -124,12 +130,12 @@ always@(posedge clk or negedge rstn) begin
 end
 
 //------------------------------------------------------------
-// 时钟路径：clk_o = clk_p | ICG(clk, gen_en)
+// Clock path: clk_o = clk_p | ICG(clk, gen_en)
 //------------------------------------------------------------
 P_CLK_GATE U_CLKDIV_ICG (
     .CLK   (clk     ),
     .EN    (gen_en  ),
-    .SE    (1'b0    ),   // DFT 插入时自动连接
+    .SE    (1'b0    ),   // connected during DFT insertion
     .YGCLK (clk_gate)
 );
 
