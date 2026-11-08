@@ -25,7 +25,7 @@
 //   Register map (other fields come from strap, bits are reserved)
 //   PLL_SYS_CFG_0[29]    : disable_sscg      default 1
 //   PLL_SYS_CFG_0[30]    : testen            default 0
-//   PLL_SYS_CFG_1[13]    : pll power on      default 1 (0 : power down)
+//   PLL_SYS_CFG_0[31]    : pd                default 0 (1 : power down)
 //   PLL_SYS_CFG_1[15:14] : testsel           default 0
 //   PLL_SYS_CFG_1[28]    : sel_extwave       default 0
 //   PLL_SYS_CFG_2[7:0]   : ext_maxaddr       default 0
@@ -100,7 +100,7 @@ wire  [7:0]  PLL_SYS_CLK_DIV2_DFT     = DFT_MODE ? 8'h27 : PLL_SYS_CLK_DIV2     
 
 wire         PLL_SYS_DIS_SSCG_DFT     = DFT_MODE ? 1'b1  : PLL_SYS_CFG_0 [29]     ;
 wire         PLL_SYS_TESTEN_DFT       = DFT_MODE ? 1'b0  : PLL_SYS_CFG_0 [30]     ;
-wire         PLL_SYS_PWRON_DFT        = DFT_MODE ? 1'b1  : PLL_SYS_CFG_1 [13]     ;
+wire         PLL_SYS_PWRON_DFT        = DFT_MODE ? 1'b1  : ~PLL_SYS_CFG_0 [31]    ;   // SCU pd : 1 = power down
 wire  [1:0]  PLL_SYS_TESTSEL_DFT      = DFT_MODE ? 2'h0  : PLL_SYS_CFG_1 [15:14]  ;
 wire         PLL_SYS_SEL_EXTWAVE_DFT  = DFT_MODE ? 1'b0  : PLL_SYS_CFG_1 [28]     ;
 wire  [7:0]  PLL_SYS_EXT_MAXADDR_DFT  = DFT_MODE ? 8'h0  : PLL_SYS_CFG_2 [ 7: 0]  ;
