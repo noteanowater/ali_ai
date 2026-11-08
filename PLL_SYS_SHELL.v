@@ -262,8 +262,8 @@ wire  PLL_SYS_PWRON_DFT_SEL = TEST_MODE ? PLL_DFT_RSTJ : PLL_SYS_PWRON_REG ;
 wire  PLL_SYS_PD ;
 
 PLL_PD_GEN U_PLL_PD_GEN (
-    .PLL_PWRON    (PLL_SYS_PWRON_DFT_SEL ),
-    .PLL_PD       (PLL_SYS_PD            ),
+    .PLL_PD_IN    (PLL_SYS_PWRON_DFT_SEL ),   // 1 : power on request
+    .PLL_PD_OUT   (PLL_SYS_PD            ),
     .PLL_CLK      (PLL_SYS_CLK           ),
     .PLL_RSTJ     (PLL_SYS_RSTJ          )
 );
@@ -339,43 +339,38 @@ clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_OUT_CLK), .rstn(PLL_SYS_RSTJ)
 endmodule
 
 
-//==========================================================================
-// Module : PLL_PD_GEN
-//   PLL_PWRON = 1 : request power on, pd released after 100 PLL_CLK cycles
-//                   (24MHz : ~4.2us, datasheet requires >= 1us)
-//   PLL_PWRON = 0 : pd = 1 immediately
-//==========================================================================
 module PLL_PD_GEN (
-    input  wire  PLL_PWRON ,
-    output wire  PLL_PD    ,
+ input   wire  PLL_PD_IN    ,
+ output  wire  PLL_PD_OUT   ,
 
-    input  wire  PLL_CLK   ,
-    input  wire  PLL_RSTJ
+ input   wire  PLL_CLK      ,
+ input   wire  PLL_RSTJ
 );
 
-localparam PD_DLY = 8'd100 ;
-
-reg [7:0] REF_CNT  ;
-reg       REF_FLAG ;
+reg [7:0] REF_CNT ;
 
 always @ (posedge PLL_CLK or negedge PLL_RSTJ)begin
   if(!PLL_RSTJ)
-    REF_CNT <= 8'd0 ;
-  else if (!PLL_PWRON)
-    REF_CNT <= 8'd0 ;
-  else if (REF_CNT != PD_DLY)
-    REF_CNT <= REF_CNT + 8'd1 ;
+    REF_CNT <= 8'b0 ;
+  else if (!PLL_PD_IN)
+    REF_CNT <= 8'b0 ;
+  else if (REF_CNT == 8'd100)
+    REF_CNT <= REF_CNT ;
+  else
+    REF_CNT <= REF_CNT + 8'b1;  
 end
 
+reg REF_FLAG ; 
+ 
 always @ (posedge PLL_CLK or negedge PLL_RSTJ)begin
   if(!PLL_RSTJ)
     REF_FLAG <= 1'b0 ;
-  else if (!PLL_PWRON)
+  else if (!PLL_PD_IN)
     REF_FLAG <= 1'b0 ;
-  else if (REF_CNT == PD_DLY)
+  else if(REF_CNT == 8'd100)
     REF_FLAG <= 1'b1 ;
 end
 
-assign PLL_PD = ~REF_FLAG ;
+assign PLL_PD_OUT = ~REF_FLAG ;
 
-endmodule
+endmodule 
