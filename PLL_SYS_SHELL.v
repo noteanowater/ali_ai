@@ -93,24 +93,26 @@ end
 wire PLL_SYS_CFG_PULSE = PLL_SYS_CFG_EN_D2 & ~PLL_SYS_CFG_EN_D3 ;
 
 //==========================================================================
-// 2. register field source (fixed to default in DFT mode)
+// 2. register field source
+//    DFT mode : CFG_EN is blocked (no CFG_PULSE) and PLL inputs are
+//               overridden in section 5, so no DFT mux is needed here.
 //==========================================================================
-wire  [7:0]  PLL_SYS_CLK_DIV1_DFT     = DFT_MODE ? 8'h3b : PLL_SYS_CLK_DIV1       ;
-wire  [7:0]  PLL_SYS_CLK_DIV2_DFT     = DFT_MODE ? 8'h27 : PLL_SYS_CLK_DIV2       ;
+wire  [7:0]  PLL_SYS_CLK_DIV1_DFT     = PLL_SYS_CLK_DIV1        ;
+wire  [7:0]  PLL_SYS_CLK_DIV2_DFT     = PLL_SYS_CLK_DIV2        ;
 
-wire         PLL_SYS_DIS_SSCG_DFT     = DFT_MODE ? 1'b1  : PLL_SYS_CFG_0 [29]     ;
-wire         PLL_SYS_TESTEN_DFT       = DFT_MODE ? 1'b0  : PLL_SYS_CFG_0 [30]     ;
-wire         PLL_SYS_PWRON_DFT        = DFT_MODE ? 1'b1  : ~PLL_SYS_CFG_0 [31]    ;   // SCU pd : 1 = power down
-wire  [1:0]  PLL_SYS_TESTSEL_DFT      = DFT_MODE ? 2'h0  : PLL_SYS_CFG_1 [15:14]  ;
-wire         PLL_SYS_SEL_EXTWAVE_DFT  = DFT_MODE ? 1'b0  : PLL_SYS_CFG_1 [28]     ;
-wire  [7:0]  PLL_SYS_EXT_MAXADDR_DFT  = DFT_MODE ? 8'h0  : PLL_SYS_CFG_2 [ 7: 0]  ;
-wire  [7:0]  PLL_SYS_EXT_WAVEVAL_DFT  = DFT_MODE ? 8'h0  : PLL_SYS_CFG_2 [15: 8]  ;
-wire  [1:0]  PLL_SYS_GVCO_BIAS_DFT    = DFT_MODE ? 2'h1  : PLL_SYS_CFG_2 [17:16]  ;
-wire  [2:0]  PLL_SYS_CPP_BIAS_DFT     = DFT_MODE ? 3'h2  : PLL_SYS_CFG_2 [20:18]  ;
-wire  [2:0]  PLL_SYS_CPI_BIAS_DFT     = DFT_MODE ? 3'h3  : PLL_SYS_CFG_2 [23:21]  ;
-wire  [3:0]  PLL_SYS_DIVVAL_DFT       = DFT_MODE ? 4'h1  : PLL_SYS_CFG_2 [27:24]  ;
-wire  [2:0]  PLL_SYS_SPREAD_DFT       = DFT_MODE ? 3'h0  : PLL_SYS_CFG_2 [30:28]  ;
-wire         PLL_SYS_DOWNSPREAD_DFT   = DFT_MODE ? 1'b0  : PLL_SYS_CFG_2 [31]     ;
+wire         PLL_SYS_DIS_SSCG_DFT     =  PLL_SYS_CFG_0 [29]     ;
+wire         PLL_SYS_TESTEN_DFT       =  PLL_SYS_CFG_0 [30]     ;
+wire         PLL_SYS_PWRON_DFT        = ~PLL_SYS_CFG_0 [31]     ;   // SCU pd : 1 = power down
+wire  [1:0]  PLL_SYS_TESTSEL_DFT      =  PLL_SYS_CFG_1 [15:14]  ;
+wire         PLL_SYS_SEL_EXTWAVE_DFT  =  PLL_SYS_CFG_1 [28]     ;
+wire  [7:0]  PLL_SYS_EXT_MAXADDR_DFT  =  PLL_SYS_CFG_2 [ 7: 0]  ;
+wire  [7:0]  PLL_SYS_EXT_WAVEVAL_DFT  =  PLL_SYS_CFG_2 [15: 8]  ;
+wire  [1:0]  PLL_SYS_GVCO_BIAS_DFT    =  PLL_SYS_CFG_2 [17:16]  ;
+wire  [2:0]  PLL_SYS_CPP_BIAS_DFT     =  PLL_SYS_CFG_2 [20:18]  ;
+wire  [2:0]  PLL_SYS_CPI_BIAS_DFT     =  PLL_SYS_CFG_2 [23:21]  ;
+wire  [3:0]  PLL_SYS_DIVVAL_DFT       =  PLL_SYS_CFG_2 [27:24]  ;
+wire  [2:0]  PLL_SYS_SPREAD_DFT       =  PLL_SYS_CFG_2 [30:28]  ;
+wire         PLL_SYS_DOWNSPREAD_DFT   =  PLL_SYS_CFG_2 [31]     ;
 
 //==========================================================================
 // 3. configuration register
@@ -255,10 +257,13 @@ wire  [3:0]  PLL_SYS_DIVVAL        = DFT_MODE  ? 4'h1             : PLL_SYS_DIVV
 wire  [2:0]  PLL_SYS_SPREAD        = DFT_MODE  ? 3'h0             : PLL_SYS_SPREAD_REG      ;
 wire         PLL_SYS_DOWNSPREAD    = DFT_MODE  ? 1'b0             : PLL_SYS_DOWNSPREAD_REG  ;
 
+wire  [7:0]  PLL_SYS_CLK_DIV1_SEL  = DFT_MODE  ? 8'h3b            : PLL_SYS_CLK_DIV1_REG    ;
+wire  [7:0]  PLL_SYS_CLK_DIV2_SEL  = DFT_MODE  ? 8'h27            : PLL_SYS_CLK_DIV2_REG    ;
+
 //==========================================================================
 // 6. power down : pd released 100 PLL_SYS_CLK cycles after power on request
 //==========================================================================
-wire  PLL_SYS_PWRON_DFT_SEL = TEST_MODE ? PLL_DFT_RSTJ : PLL_SYS_PWRON_REG ;
+wire  PLL_SYS_PWRON_DFT_SEL = TEST_MODE ? PLL_DFT_RSTJ : MBIST_ES_MODE ? 1'b1 : PLL_SYS_PWRON_REG ;
 wire  PLL_SYS_PD ;
 
 PLL_PD_GEN U_PLL_PD_GEN (
@@ -333,8 +338,8 @@ SRCKBUF U_PLL_SYS_SCAN_DIV2_CLK_BUF (.Z(PLL_SYS_SCAN_DIV2_CLK), .I(PLL_SYS_SCAN_
 //==========================================================================
 // 10. test clock divider (observe clock)
 //==========================================================================
-clk_div_256 U_PLL_SYS_TEST_DIV1 (.clk(PLL_SYS_F600_OUT_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV1_REG), .clk_o(PLL_SYS_TEST_DIV1_CLK));
-clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_OUT_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV2_REG), .clk_o(PLL_SYS_TEST_DIV2_CLK));
+clk_div_256 U_PLL_SYS_TEST_DIV1 (.clk(PLL_SYS_F600_OUT_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV1_SEL), .clk_o(PLL_SYS_TEST_DIV1_CLK));
+clk_div_256 U_PLL_SYS_TEST_DIV2 (.clk(PLL_SYS_F400_OUT_CLK), .rstn(PLL_SYS_RSTJ), .div(PLL_SYS_CLK_DIV2_SEL), .clk_o(PLL_SYS_TEST_DIV2_CLK));
 
 endmodule
 
