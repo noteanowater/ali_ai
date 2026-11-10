@@ -13,14 +13,8 @@
 //   | 2'b11| 75       | 1    | 1800      | int  | /4  450   | /5  360   | low  |
 //   +------+----------+------+-----------+------+-----------+-----------+------+
 //
-//   TEST_MODE (integer mode only, selected by CPU_SPEED_SEL[1:0])
-//   | 2'b00| 83       | 1    | 1992      | int  | /4  498   | /5  398.4 |      |
-//   | 2'b01| 233      | 2    | 2796      | int  | /5  559.2 | /7  399.4 |      |
-//   | 2'b10| 100      | 1    | 2400      | int  | /4  600   | /6  400   |      |
-//   | 2'b11| 75       | 1    | 1800      | int  | /4  450   | /5  360   | low  |
-//
-//   MBIST_ES_MODE (fixed)
-//   |  -   | 250      | 2    | 3000      | int  | /4  750   | /5  600   |      |
+//   TEST_MODE / MBIST_ES_MODE : same divider setting as functional mode
+//   (selected by CPU_SPEED_SEL), other PLL inputs fixed to default value
 //
 //   Register map (other fields come from strap, bits are reserved)
 //   PLL_SYS_CFG_0[29]    : disable_sscg      default 1
@@ -97,22 +91,22 @@ wire PLL_SYS_CFG_PULSE = PLL_SYS_CFG_EN_D2 & ~PLL_SYS_CFG_EN_D3 ;
 //    DFT mode : CFG_EN is blocked (no CFG_PULSE) and PLL inputs are
 //               overridden in section 5, so no DFT mux is needed here.
 //==========================================================================
-wire  [7:0]  PLL_SYS_CLK_DIV1_DFT     = PLL_SYS_CLK_DIV1        ;
-wire  [7:0]  PLL_SYS_CLK_DIV2_DFT     = PLL_SYS_CLK_DIV2        ;
+wire  [7:0]  PLL_SYS_CLK_DIV1_TEMP     = PLL_SYS_CLK_DIV1        ;
+wire  [7:0]  PLL_SYS_CLK_DIV2_TEMP     = PLL_SYS_CLK_DIV2        ;
 
-wire         PLL_SYS_DIS_SSCG_DFT     =  PLL_SYS_CFG_0 [29]     ;
-wire         PLL_SYS_TESTEN_DFT       =  PLL_SYS_CFG_0 [30]     ;
-wire         PLL_SYS_PWRON_DFT        = ~PLL_SYS_CFG_0 [31]     ;   // SCU pd : 1 = power down
-wire  [1:0]  PLL_SYS_TESTSEL_DFT      =  PLL_SYS_CFG_1 [15:14]  ;
-wire         PLL_SYS_SEL_EXTWAVE_DFT  =  PLL_SYS_CFG_1 [28]     ;
-wire  [7:0]  PLL_SYS_EXT_MAXADDR_DFT  =  PLL_SYS_CFG_2 [ 7: 0]  ;
-wire  [7:0]  PLL_SYS_EXT_WAVEVAL_DFT  =  PLL_SYS_CFG_2 [15: 8]  ;
-wire  [1:0]  PLL_SYS_GVCO_BIAS_DFT    =  PLL_SYS_CFG_2 [17:16]  ;
-wire  [2:0]  PLL_SYS_CPP_BIAS_DFT     =  PLL_SYS_CFG_2 [20:18]  ;
-wire  [2:0]  PLL_SYS_CPI_BIAS_DFT     =  PLL_SYS_CFG_2 [23:21]  ;
-wire  [3:0]  PLL_SYS_DIVVAL_DFT       =  PLL_SYS_CFG_2 [27:24]  ;
-wire  [2:0]  PLL_SYS_SPREAD_DFT       =  PLL_SYS_CFG_2 [30:28]  ;
-wire         PLL_SYS_DOWNSPREAD_DFT   =  PLL_SYS_CFG_2 [31]     ;
+wire         PLL_SYS_DIS_SSCG_TEMP     =  PLL_SYS_CFG_0 [29]     ;
+wire         PLL_SYS_TESTEN_TEMP       =  PLL_SYS_CFG_0 [30]     ;
+wire         PLL_SYS_PWRON_TEMP        = ~PLL_SYS_CFG_0 [31]     ;   // SCU pd : 1 = power down
+wire  [1:0]  PLL_SYS_TESTSEL_TEMP      =  PLL_SYS_CFG_1 [15:14]  ;
+wire         PLL_SYS_SEL_EXTWAVE_TEMP  =  PLL_SYS_CFG_1 [28]     ;
+wire  [7:0]  PLL_SYS_EXT_MAXADDR_TEMP  =  PLL_SYS_CFG_2 [ 7: 0]  ;
+wire  [7:0]  PLL_SYS_EXT_WAVEVAL_TEMP  =  PLL_SYS_CFG_2 [15: 8]  ;
+wire  [1:0]  PLL_SYS_GVCO_BIAS_TEMP    =  PLL_SYS_CFG_2 [17:16]  ;
+wire  [2:0]  PLL_SYS_CPP_BIAS_TEMP     =  PLL_SYS_CFG_2 [20:18]  ;
+wire  [2:0]  PLL_SYS_CPI_BIAS_TEMP     =  PLL_SYS_CFG_2 [23:21]  ;
+wire  [3:0]  PLL_SYS_DIVVAL_TEMP       =  PLL_SYS_CFG_2 [27:24]  ;
+wire  [2:0]  PLL_SYS_SPREAD_TEMP       =  PLL_SYS_CFG_2 [30:28]  ;
+wire         PLL_SYS_DOWNSPREAD_TEMP   =  PLL_SYS_CFG_2 [31]     ;
 
 //==========================================================================
 // 3. configuration register
@@ -152,21 +146,21 @@ always @ (posedge PLL_SYS_CLK or negedge PLL_SYS_RSTJ)begin
     PLL_SYS_DOWNSPREAD_REG    <= 1'b0  ;    // center spread
   end
   else if (PLL_SYS_CFG_PULSE) begin
-    PLL_SYS_CLK_DIV1_REG      <= PLL_SYS_CLK_DIV1_DFT      ;
-    PLL_SYS_CLK_DIV2_REG      <= PLL_SYS_CLK_DIV2_DFT      ;
-    PLL_SYS_DIS_SSCG_REG      <= PLL_SYS_DIS_SSCG_DFT      ;
-    PLL_SYS_TESTEN_REG        <= PLL_SYS_TESTEN_DFT        ;
-    PLL_SYS_PWRON_REG         <= PLL_SYS_PWRON_DFT         ;
-    PLL_SYS_TESTSEL_REG       <= PLL_SYS_TESTSEL_DFT       ;
-    PLL_SYS_SEL_EXTWAVE_REG   <= PLL_SYS_SEL_EXTWAVE_DFT   ;
-    PLL_SYS_EXT_MAXADDR_REG   <= PLL_SYS_EXT_MAXADDR_DFT   ;
-    PLL_SYS_EXT_WAVEVAL_REG   <= PLL_SYS_EXT_WAVEVAL_DFT   ;
-    PLL_SYS_GVCO_BIAS_REG     <= PLL_SYS_GVCO_BIAS_DFT     ;
-    PLL_SYS_CPP_BIAS_REG      <= PLL_SYS_CPP_BIAS_DFT      ;
-    PLL_SYS_CPI_BIAS_REG      <= PLL_SYS_CPI_BIAS_DFT      ;
-    PLL_SYS_DIVVAL_REG        <= PLL_SYS_DIVVAL_DFT        ;
-    PLL_SYS_SPREAD_REG        <= PLL_SYS_SPREAD_DFT        ;
-    PLL_SYS_DOWNSPREAD_REG    <= PLL_SYS_DOWNSPREAD_DFT    ;
+    PLL_SYS_CLK_DIV1_REG      <= PLL_SYS_CLK_DIV1_TEMP      ;
+    PLL_SYS_CLK_DIV2_REG      <= PLL_SYS_CLK_DIV2_TEMP      ;
+    PLL_SYS_DIS_SSCG_REG      <= PLL_SYS_DIS_SSCG_TEMP      ;
+    PLL_SYS_TESTEN_REG        <= PLL_SYS_TESTEN_TEMP        ;
+    PLL_SYS_PWRON_REG         <= PLL_SYS_PWRON_TEMP         ;
+    PLL_SYS_TESTSEL_REG       <= PLL_SYS_TESTSEL_TEMP       ;
+    PLL_SYS_SEL_EXTWAVE_REG   <= PLL_SYS_SEL_EXTWAVE_TEMP   ;
+    PLL_SYS_EXT_MAXADDR_REG   <= PLL_SYS_EXT_MAXADDR_TEMP   ;
+    PLL_SYS_EXT_WAVEVAL_REG   <= PLL_SYS_EXT_WAVEVAL_TEMP   ;
+    PLL_SYS_GVCO_BIAS_REG     <= PLL_SYS_GVCO_BIAS_TEMP     ;
+    PLL_SYS_CPP_BIAS_REG      <= PLL_SYS_CPP_BIAS_TEMP      ;
+    PLL_SYS_CPI_BIAS_REG      <= PLL_SYS_CPI_BIAS_TEMP      ;
+    PLL_SYS_DIVVAL_REG        <= PLL_SYS_DIVVAL_TEMP        ;
+    PLL_SYS_SPREAD_REG        <= PLL_SYS_SPREAD_TEMP        ;
+    PLL_SYS_DOWNSPREAD_REG    <= PLL_SYS_DOWNSPREAD_TEMP    ;
   end
 end
 
@@ -210,39 +204,19 @@ wire [2:0]  PLL_SYS_POSTDIV1_1_FUNC  = 3'h0 ;                         // /1
 wire        PLL_SYS_DACPD_FUNC       = sel_600 | sel_low ;            // 0 : frac , 1 : int
 wire        PLL_SYS_DSMPD_FUNC       = sel_600 | sel_low ;            // 0 : frac , 1 : int
 
-// 4.2 TEST_MODE (integer mode only)
-wire [11:0] PLL_SYS_NI_DFT           = {12{sel_500}} & 12'd83     |   // 1992MHz -> 498   / 398.4
-                                       {12{sel_560}} & 12'd233    |   // 2796MHz -> 559.2 / 399.4
-                                       {12{sel_600}} & 12'd100    |   // 2400MHz -> 600   / 400
-                                       {12{sel_low}} & 12'd75     ;   // 1800MHz -> 450   / 360
-
-wire [4:0]  PLL_SYS_M_DFT            = {5{sel_500}}  & 5'd1       |
-                                       {5{sel_560}}  & 5'd2       |
-                                       {5{sel_600}}  & 5'd1       |
-                                       {5{sel_low}}  & 5'd1       ;
-
-wire [2:0]  PLL_SYS_Q0_0_DFT         = {3{sel_500}}  & 3'd3       |   // /4
-                                       {3{sel_560}}  & 3'd4       |   // /5
-                                       {3{sel_600}}  & 3'd3       |   // /4
-                                       {3{sel_low}}  & 3'd3       ;   // /4
-
-wire [2:0]  PLL_SYS_Q0_1_DFT         = {3{sel_500}}  & 3'd4       |   // /5
-                                       {3{sel_560}}  & 3'd6       |   // /7
-                                       {3{sel_600}}  & 3'd5       |   // /6
-                                       {3{sel_low}}  & 3'd4       ;   // /5
-
 //==========================================================================
-// 5. PLL input select : TEST_MODE > MBIST_ES_MODE > functional
+// 5. PLL input select : divider from strap, register fields fixed in DFT mode
 //==========================================================================
-wire  [11:0] PLL_SYS_FBDIV         = TEST_MODE ? PLL_SYS_NI_DFT   : MBIST_ES_MODE ? 12'd250 : PLL_SYS_FBDIV_FUNC      ;// NI
-wire  [23:0] PLL_SYS_FRAC          = TEST_MODE ? 24'd0            : MBIST_ES_MODE ? 24'd0   : PLL_SYS_FRAC_FUNC       ;
-wire  [4:0]  PLL_SYS_PREDIV        = TEST_MODE ? PLL_SYS_M_DFT    : MBIST_ES_MODE ? 5'd2    : PLL_SYS_PREDIV_FUNC     ;// M
-wire  [2:0]  PLL_SYS_POSTDIV0_0    = TEST_MODE ? PLL_SYS_Q0_0_DFT : MBIST_ES_MODE ? 3'd3    : PLL_SYS_POSTDIV0_0_FUNC ;
-wire  [2:0]  PLL_SYS_POSTDIV0_1    = TEST_MODE ? PLL_SYS_Q0_1_DFT : MBIST_ES_MODE ? 3'd4    : PLL_SYS_POSTDIV0_1_FUNC ;
-wire  [2:0]  PLL_SYS_POSTDIV1_0    = TEST_MODE ? 3'h0             : MBIST_ES_MODE ? 3'h0    : PLL_SYS_POSTDIV1_0_FUNC ;
-wire  [2:0]  PLL_SYS_POSTDIV1_1    = TEST_MODE ? 3'h0             : MBIST_ES_MODE ? 3'h0    : PLL_SYS_POSTDIV1_1_FUNC ;
-wire         PLL_SYS_DACPD         = TEST_MODE ? 1'b1             : MBIST_ES_MODE ? 1'b1    : PLL_SYS_DACPD_FUNC      ;
-wire         PLL_SYS_DSMPD         = TEST_MODE ? 1'b1             : MBIST_ES_MODE ? 1'b1    : PLL_SYS_DSMPD_FUNC      ;
+
+wire  [11:0] PLL_SYS_FBDIV         =  PLL_SYS_FBDIV_FUNC      ;// NI
+wire  [23:0] PLL_SYS_FRAC          =  PLL_SYS_FRAC_FUNC       ;
+wire  [4:0]  PLL_SYS_PREDIV        =  PLL_SYS_PREDIV_FUNC     ;// M
+wire  [2:0]  PLL_SYS_POSTDIV0_0    =  PLL_SYS_POSTDIV0_0_FUNC ;
+wire  [2:0]  PLL_SYS_POSTDIV0_1    =  PLL_SYS_POSTDIV0_1_FUNC ;
+wire  [2:0]  PLL_SYS_POSTDIV1_0    =  PLL_SYS_POSTDIV1_0_FUNC ;
+wire  [2:0]  PLL_SYS_POSTDIV1_1    =  PLL_SYS_POSTDIV1_1_FUNC ;
+wire         PLL_SYS_DACPD         =  PLL_SYS_DACPD_FUNC      ;
+wire         PLL_SYS_DSMPD         =  PLL_SYS_DSMPD_FUNC      ;
 
 wire         PLL_SYS_DIS_SSCG      = DFT_MODE  ? 1'b1             : PLL_SYS_DIS_SSCG_REG    ;
 wire         PLL_SYS_TESTEN        = DFT_MODE  ? 1'b0             : PLL_SYS_TESTEN_REG      ;

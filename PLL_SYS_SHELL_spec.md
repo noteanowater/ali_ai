@@ -9,7 +9,7 @@ PLL_SYS_SHELL 是 INNO PLL（SMIC 40LL）的封装模块，为 A45 CPU 和系统
 - clko1：BUS/IP 时钟（PLL_SYS_F400_CLK）
 - 分频比（NI、frac、M、postdiv）：由 strap pin CPU_SPEED_SEL[1:0] 决定
 - 环路参数、SSC、测试监测和断电控制：由 SCU 寄存器配置
-- TEST_MODE、MBIST_ES_MODE：PLL 全部输入固定为测试值
+- TEST_MODE、MBIST_ES_MODE：分频配置仍由 strap 决定，寄存器配置的字段固定为默认值
 
 ## 2. 频率计算
 
@@ -39,22 +39,12 @@ Fclko = Fvco / (postdiv0_x + 1) / (postdiv1_x + 1)
 - 小数模式的频率误差小于 ±0.5 Hz，可以忽略。
 - 低频档的后分频和 2'b00 档相同，只把 VCO 降低 10%（2000 → 1800 MHz），CPU 和 BUS 一起降 10%。
 
-### 3.2 TEST_MODE（只用整数模式）
+### 3.2 TEST_MODE / MBIST_ES_MODE
 
-| CPU_SPEED_SEL | NI | M | Fvco (MHz) | CPU | BUS |
-|---|---|---|---|---|---|
-| 2'b00 | 83 | 1 | 1992 | 498 | 398.4 |
-| 2'b01 | 233 | 2 | 2796 | 559.2 | 399.4 |
-| 2'b10 | 100 | 1 | 2400 | 600 | 400 |
-| 2'b11 | 75 | 1 | 1800 | 450 | 360 |
+分频配置（NI、frac、M、postdiv、dacpd、dsmpd）和功能模式相同，由 CPU_SPEED_SEL 决定；寄存器配置的字段固定为默认值（见第 8 节）。
 
-### 3.3 MBIST_ES_MODE（固定配置）
-
-| NI | M | Fvco (MHz) | CPU | BUS |
-|---|---|---|---|---|
-| 250 | 2 | 3000 | ÷4 → 750 | ÷5 → 600 |
-
-> MBIST_ES_MODE 下 CPU 750 MHz、BUS 600 MHz，都高于功能模式的最高频率。如果不是有意超频测试，可以改为 NI=100、M=1，得到 600/400 MHz。
+> - ATE 上 CPU_SPEED_SEL 必须给确定的值，测试频率完全由它决定。
+> - CPU_SPEED_SEL = 2'b00 或 2'b01 时，测试期间 PLL 工作在小数模式（Delta-Sigma 调制器运行）。如果希望测试时只用整数模式，ATE 上 strap 应给 2'b10（600/400 MHz）或 2'b11（450/360 MHz）。
 
 ## 4. 端口说明
 
@@ -129,10 +119,7 @@ pd 释放后，等 PLL_SYS_LOCK = 1（手册规定不超过 500 个参考周期�
 
 | 信号 | TEST_MODE | MBIST_ES_MODE |
 |---|---|---|
-| NI / M / postdiv0_x | 由 CPU_SPEED_SEL 选整数配置（见 3.2） | 250 / 2 / ÷4、÷5 |
-| frac | 0 | 0 |
-| dacpd / dsmpd | 1 / 1 | 1 / 1 |
-| postdiv1_x | 0（÷1） | 0（÷1） |
+| NI / frac / M / postdiv / dacpd / dsmpd | 由 CPU_SPEED_SEL 决定（同功能模式） | 由 CPU_SPEED_SEL 决定（同功能模式） |
 | disable_sscg / testen / testsel | 1 / 0 / 0 | 1 / 0 / 0 |
 | gvco / cpp / cpi_bias | 1 / 2 / 3 | 1 / 2 / 3 |
 | divval / spread / downspread | 1 / 0 / 0 | 1 / 0 / 0 |
@@ -141,7 +128,7 @@ pd 释放后，等 PLL_SYS_LOCK = 1（手册规定不超过 500 个参考周期�
 | 输出时钟门控 | SE = 1，强制打开 | SE = 1，强制打开 |
 | SCAN_DIV2_CLK | 由 F600_CLK 二分频产生 | 不翻转 |
 
-所有测试值都在寄存器之后、紧挨 PLL 输入的地方选择。扫描移位期间寄存器值会变化，但 PLL 的配置引脚保持不变。
+寄存器字段的测试值都在寄存器之后、紧挨 PLL 输入的地方选择，扫描移位期间寄存器值会变化，但 PLL 的配置引脚保持不变。分频配置直接来自 strap，不经过寄存器，也不受扫描影响。
 
 ## 9. 设计约束和待确认事项
 
