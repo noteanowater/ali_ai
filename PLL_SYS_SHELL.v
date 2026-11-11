@@ -10,7 +10,7 @@
 //   | 2'b00| 83 +1/3  | 1    | 2000      | frac | /4  500   | /5  400   |      |
 //   | 2'b01| 116+2/3  | 1    | 2800      | frac | /5  560   | /7  400   |      |
 //   | 2'b10| 100      | 1    | 2400      | int  | /4  600   | /6  400   |      |
-//   | 2'b11| 75       | 1    | 1800      | int  | /4  450   | /5  360   | low  |
+//   | 2'b11| 100      | 1    | 2400      | int  | /5  480   | /6  400   | low  |
 //   +------+----------+------+-----------+------+-----------+-----------+------+
 //
 //   TEST_MODE / MBIST_ES_MODE : same divider setting as functional mode
@@ -170,33 +170,33 @@ end
 wire sel_500 = (CPU_SPEED_SEL[1:0] == 2'b00);
 wire sel_560 = (CPU_SPEED_SEL[1:0] == 2'b01);
 wire sel_600 = (CPU_SPEED_SEL[1:0] == 2'b10);
-wire sel_low = (CPU_SPEED_SEL[1:0] == 2'b11);   // low speed : 500MHz setting with VCO -10%
+wire sel_low = (CPU_SPEED_SEL[1:0] == 2'b11);   // low speed : CPU 480MHz, BUS 400MHz
 
 // 4.1 functional mode
 wire [11:0] PLL_SYS_FBDIV_FUNC       = {12{sel_500}} & 12'h053    |   // NI=83   -> 500MHz
                                        {12{sel_560}} & 12'h074    |   // NI=116  -> 560MHz
                                        {12{sel_600}} & 12'h064    |   // NI=100  -> 600MHz
-                                       {12{sel_low}} & 12'h04B    ;   // NI=75   -> 450MHz
+                                       {12{sel_low}} & 12'h064    ;   // NI=100  -> 480MHz
 
 wire [23:0] PLL_SYS_FRAC_FUNC        = {24{sel_500}} & 24'h555555 |   // NF=1/3  -> 500MHz
                                        {24{sel_560}} & 24'hAAAAAB |   // NF=2/3  -> 560MHz
                                        {24{sel_600}} & 24'h000000 |   // NF=0    -> 600MHz
-                                       {24{sel_low}} & 24'h000000 ;   // NF=0    -> 450MHz
+                                       {24{sel_low}} & 24'h000000 ;   // NF=0    -> 480MHz
 
 wire [4:0]  PLL_SYS_PREDIV_FUNC      = {5{sel_500}}  & 5'h01      |   // M=1     -> 500MHz
                                        {5{sel_560}}  & 5'h01      |   // M=1     -> 560MHz
                                        {5{sel_600}}  & 5'h01      |   // M=1     -> 600MHz
-                                       {5{sel_low}}  & 5'h01      ;   // M=1     -> 450MHz
+                                       {5{sel_low}}  & 5'h01      ;   // M=1     -> 480MHz
 
 wire [2:0]  PLL_SYS_POSTDIV0_0_FUNC  = {3{sel_500}}  & 3'h3       |   // /4  -> 500MHz
                                        {3{sel_560}}  & 3'h4       |   // /5  -> 560MHz
                                        {3{sel_600}}  & 3'h3       |   // /4  -> 600MHz
-                                       {3{sel_low}}  & 3'h3       ;   // /4  -> 450MHz
+                                       {3{sel_low}}  & 3'h4       ;   // /5  -> 480MHz
 
 wire [2:0]  PLL_SYS_POSTDIV0_1_FUNC  = {3{sel_500}}  & 3'h4       |   // /5  -> 400MHz
                                        {3{sel_560}}  & 3'h6       |   // /7  -> 400MHz
                                        {3{sel_600}}  & 3'h5       |   // /6  -> 400MHz
-                                       {3{sel_low}}  & 3'h4       ;   // /5  -> 360MHz
+                                       {3{sel_low}}  & 3'h5       ;   // /6  -> 400MHz
 
 wire [2:0]  PLL_SYS_POSTDIV1_0_FUNC  = 3'h0 ;                         // /1
 wire [2:0]  PLL_SYS_POSTDIV1_1_FUNC  = 3'h0 ;                         // /1
