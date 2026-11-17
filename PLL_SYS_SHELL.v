@@ -16,21 +16,19 @@
 //   TEST_MODE / MBIST_ES_MODE : same divider setting as functional mode
 //   (selected by CPU_SPEED_SEL), other PLL inputs fixed to default value
 //
-//   Register map (other fields come from strap, bits are reserved)
-//   PLL_SYS_CFG_0[29]    : disable_sscg      default 1
-//   PLL_SYS_CFG_0[30]    : testen            default 0
-//   PLL_SYS_CFG_0[31]    : pd                default 0 (1 : power down)
-//   PLL_SYS_CFG_1[15:14] : testsel           default 0
-//   PLL_SYS_CFG_1[28]    : sel_extwave       default 0
-//   PLL_SYS_CFG_2[7:0]   : ext_maxaddr       default 0
-//   PLL_SYS_CFG_2[15:8]  : extwaveval        default 0
-//   PLL_SYS_CFG_2[17:16] : gvco_bias         default 1
-//   PLL_SYS_CFG_2[20:18] : cpp_bias          default 2
-//   PLL_SYS_CFG_2[23:21] : cpi_bias          default 3
-//   PLL_SYS_CFG_2[27:24] : divval            default 1
-//   PLL_SYS_CFG_2[30:28] : spread            default 0
-//   PLL_SYS_CFG_2[31]    : downspread        default 0
-//   PLL_SYS_CFG_EN rising edge loads all fields (incl. CLK_DIV1/2)
+//   SCU interface
+//   input  (SCU register -> PLL, loaded on PLL_SYS_CFG_EN rising edge)
+//     PLLSYS_DISABLE_SSCG  default 1      PLLSYS_TESTEN      default 0
+//     PLLSYS_PD            default 0      (1 : power down)
+//     PLLSYS_TESTSEL       default 0      PLLSYS_SEL_EXTWAVE default 0
+//     PLLSYS_EXT_MAXADDR   default 0      PLLSYS_EXTWAVEVAL  default 0
+//     PLLSYS_GVCO_BIAS     default 1      PLLSYS_CPP_BIAS    default 2
+//     PLLSYS_CPI_BIAS      default 3      PLLSYS_DIVVAL      default 1
+//     PLLSYS_SPREAD        default 0      PLLSYS_DOWNSPREAD  default 0
+//     PLL_SYS_CLK_DIV1/2 (observe clock divider) also loaded on CFG_EN
+//   output (PLL divider setting decoded from strap, read back by SCU)
+//     PLLSYS_FRAC / PREDIV / FBDIV / DACPD / DSMPD / POSTDIV0_0 / POSTDIV0_1
+//     PLLSYS_POSTDIV1_0 / POSTDIV1_1
 //==========================================================================
 module PLL_SYS_SHELL (
     output wire        PLL_SYS_F600_CLK      ,
@@ -46,9 +44,29 @@ module PLL_SYS_SHELL (
 
     input  wire [7:0]  PLL_SYS_CLK_DIV1      ,
     input  wire [7:0]  PLL_SYS_CLK_DIV2      ,
-    input  wire [31:0] PLL_SYS_CFG_0         ,
-    input  wire [28:0] PLL_SYS_CFG_1         ,
-    input  wire [31:0] PLL_SYS_CFG_2         ,
+    output wire [23:0] PLLSYS_FRAC           ,   // read back : strap decoded
+    output wire [4:0]  PLLSYS_PREDIV         ,
+    input  wire        PLLSYS_DISABLE_SSCG   ,
+    input  wire        PLLSYS_TESTEN         ,
+    input  wire        PLLSYS_PD             ,   // 1 : power down
+    output wire [11:0] PLLSYS_FBDIV          ,
+    output wire        PLLSYS_DACPD          ,
+    output wire        PLLSYS_DSMPD          ,
+    input  wire [1:0]  PLLSYS_TESTSEL        ,
+    output wire [2:0]  PLLSYS_POSTDIV0_0     ,
+    output wire [2:0]  PLLSYS_POSTDIV0_1     ,
+    output wire [2:0]  PLLSYS_POSTDIV1_0     ,
+    output wire [2:0]  PLLSYS_POSTDIV1_1     ,
+    input  wire        PLLSYS_SEL_EXTWAVE    ,
+    input  wire [7:0]  PLLSYS_EXT_MAXADDR    ,
+    input  wire [7:0]  PLLSYS_EXTWAVEVAL     ,
+    input  wire [1:0]  PLLSYS_GVCO_BIAS      ,
+    input  wire [2:0]  PLLSYS_CPP_BIAS       ,
+    input  wire [2:0]  PLLSYS_CPI_BIAS       ,
+    input  wire [3:0]  PLLSYS_DIVVAL         ,
+    input  wire [2:0]  PLLSYS_SPREAD         ,
+    input  wire        PLLSYS_DOWNSPREAD     ,
+
     input  wire        PLL_SYS_CFG_EN        ,
 
     input  wire [1:0]  CPU_SPEED_SEL         ,   // strap, latched outside
@@ -94,19 +112,19 @@ wire PLL_SYS_CFG_PULSE = PLL_SYS_CFG_EN_D2 & ~PLL_SYS_CFG_EN_D3 ;
 wire  [7:0]  PLL_SYS_CLK_DIV1_TEMP     = PLL_SYS_CLK_DIV1        ;
 wire  [7:0]  PLL_SYS_CLK_DIV2_TEMP     = PLL_SYS_CLK_DIV2        ;
 
-wire         PLL_SYS_DIS_SSCG_TEMP     =  PLL_SYS_CFG_0 [29]     ;
-wire         PLL_SYS_TESTEN_TEMP       =  PLL_SYS_CFG_0 [30]     ;
-wire         PLL_SYS_PWRON_TEMP        = ~PLL_SYS_CFG_0 [31]     ;   // SCU pd : 1 = power down
-wire  [1:0]  PLL_SYS_TESTSEL_TEMP      =  PLL_SYS_CFG_1 [15:14]  ;
-wire         PLL_SYS_SEL_EXTWAVE_TEMP  =  PLL_SYS_CFG_1 [28]     ;
-wire  [7:0]  PLL_SYS_EXT_MAXADDR_TEMP  =  PLL_SYS_CFG_2 [ 7: 0]  ;
-wire  [7:0]  PLL_SYS_EXT_WAVEVAL_TEMP  =  PLL_SYS_CFG_2 [15: 8]  ;
-wire  [1:0]  PLL_SYS_GVCO_BIAS_TEMP    =  PLL_SYS_CFG_2 [17:16]  ;
-wire  [2:0]  PLL_SYS_CPP_BIAS_TEMP     =  PLL_SYS_CFG_2 [20:18]  ;
-wire  [2:0]  PLL_SYS_CPI_BIAS_TEMP     =  PLL_SYS_CFG_2 [23:21]  ;
-wire  [3:0]  PLL_SYS_DIVVAL_TEMP       =  PLL_SYS_CFG_2 [27:24]  ;
-wire  [2:0]  PLL_SYS_SPREAD_TEMP       =  PLL_SYS_CFG_2 [30:28]  ;
-wire         PLL_SYS_DOWNSPREAD_TEMP   =  PLL_SYS_CFG_2 [31]     ;
+wire         PLL_SYS_DIS_SSCG_TEMP     =  PLLSYS_DISABLE_SSCG    ;
+wire         PLL_SYS_TESTEN_TEMP       =  PLLSYS_TESTEN          ;
+wire         PLL_SYS_PWRON_TEMP        = ~PLLSYS_PD              ;   // SCU pd : 1 = power down
+wire  [1:0]  PLL_SYS_TESTSEL_TEMP      =  PLLSYS_TESTSEL         ;
+wire         PLL_SYS_SEL_EXTWAVE_TEMP  =  PLLSYS_SEL_EXTWAVE     ;
+wire  [7:0]  PLL_SYS_EXT_MAXADDR_TEMP  =  PLLSYS_EXT_MAXADDR     ;
+wire  [7:0]  PLL_SYS_EXT_WAVEVAL_TEMP  =  PLLSYS_EXTWAVEVAL      ;
+wire  [1:0]  PLL_SYS_GVCO_BIAS_TEMP    =  PLLSYS_GVCO_BIAS       ;
+wire  [2:0]  PLL_SYS_CPP_BIAS_TEMP     =  PLLSYS_CPP_BIAS        ;
+wire  [2:0]  PLL_SYS_CPI_BIAS_TEMP     =  PLLSYS_CPI_BIAS        ;
+wire  [3:0]  PLL_SYS_DIVVAL_TEMP       =  PLLSYS_DIVVAL          ;
+wire  [2:0]  PLL_SYS_SPREAD_TEMP       =  PLLSYS_SPREAD          ;
+wire         PLL_SYS_DOWNSPREAD_TEMP   =  PLLSYS_DOWNSPREAD      ;
 
 //==========================================================================
 // 3. configuration register
@@ -217,6 +235,17 @@ wire  [2:0]  PLL_SYS_POSTDIV1_0    =  PLL_SYS_POSTDIV1_0_FUNC ;
 wire  [2:0]  PLL_SYS_POSTDIV1_1    =  PLL_SYS_POSTDIV1_1_FUNC ;
 wire         PLL_SYS_DACPD         =  PLL_SYS_DACPD_FUNC      ;
 wire         PLL_SYS_DSMPD         =  PLL_SYS_DSMPD_FUNC      ;
+
+// read back to SCU : divider setting actually applied to the PLL
+assign PLLSYS_FBDIV       = PLL_SYS_FBDIV      ;
+assign PLLSYS_FRAC        = PLL_SYS_FRAC       ;
+assign PLLSYS_PREDIV      = PLL_SYS_PREDIV     ;
+assign PLLSYS_POSTDIV0_0  = PLL_SYS_POSTDIV0_0 ;
+assign PLLSYS_POSTDIV0_1  = PLL_SYS_POSTDIV0_1 ;
+assign PLLSYS_POSTDIV1_0  = PLL_SYS_POSTDIV1_0 ;
+assign PLLSYS_POSTDIV1_1  = PLL_SYS_POSTDIV1_1 ;
+assign PLLSYS_DACPD       = PLL_SYS_DACPD      ;
+assign PLLSYS_DSMPD       = PLL_SYS_DSMPD      ;
 
 wire         PLL_SYS_DIS_SSCG      = DFT_MODE  ? 1'b1             : PLL_SYS_DIS_SSCG_REG    ;
 wire         PLL_SYS_TESTEN        = DFT_MODE  ? 1'b0             : PLL_SYS_TESTEN_REG      ;

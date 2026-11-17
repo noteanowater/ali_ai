@@ -58,7 +58,10 @@ Fclko = Fvco / (postdiv0_x + 1) / (postdiv1_x + 1)
 | PLL_SYS_TEST_DIV1_CLK / DIV2_CLK | O | 1 | clko0 / clko1 的分频观测时钟 |
 | PLL_SYS_SCAN_DIV1_CLK / DIV2_CLK | O | 1 | 扫描时钟（÷1 / ÷2） |
 | PLL_SYS_CLK_DIV1 / DIV2 | I | 8 | 观测时钟分频值 |
-| PLL_SYS_CFG_0 / 1 / 2 | I | 32 / 29 / 32 | SCU 配置寄存器 |
+| PLLSYS_DISABLE_SSCG / TESTEN / PD / TESTSEL / SEL_EXTWAVE | I | 1/1/1/2/1 | SCU 寄存器字段，CFG_EN 时装载（PD：1 = 断电） |
+| PLLSYS_EXT_MAXADDR / EXTWAVEVAL / GVCO_BIAS / CPP_BIAS / CPI_BIAS / DIVVAL / SPREAD / DOWNSPREAD | I | 8/8/2/3/3/4/3/1 | SCU 寄存器字段，CFG_EN 时装载 |
+| PLLSYS_FRAC / PREDIV / FBDIV / DACPD / DSMPD | O | 24/5/12/1/1 | strap 译码后实际送给 PLL 的分频配置，供 SCU 回读 |
+| PLLSYS_POSTDIV0_0 / 0_1 / 1_0 / 1_1 | O | 3 | 同上 |
 | PLL_SYS_CFG_EN | I | 1 | 配置装载使能，上升沿有效 |
 | CPU_SPEED_SEL | I | 2 | strap pin 频率选择，需在模块外锁存 |
 | TEST_MODE | I | 1 | 扫描测试模式 |

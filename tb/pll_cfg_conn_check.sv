@@ -74,22 +74,14 @@ task pll_cfg_conn_check(output int err_cnt);
 
   //------------------------------------------------------------------------
   // PLL_SYS : 0x54 / 0x58 / 0x5C
-  //   divider fields (frac/prediv/fbdiv/dacpd/dsmpd/postdiv) are not used
-  //   by PLL_SYS_SHELL (strap), so they are checked at the shell port.
+  //   divider fields (frac/prediv/fbdiv/dacpd/dsmpd/postdiv) come from
+  //   strap and are PLL_SYS_SHELL outputs (read back by SCU), so only the
+  //   SCU -> PLL input fields are checked here.
   //------------------------------------------------------------------------
-  `PLL_CONN_CHK(SYS_FRAC        , `PLL_CONN_SCU.pllsys_frac_reg        , `PLL_CONN_SYS.PLL_SYS_CFG_0[23:0]       , 24, 0)
-  `PLL_CONN_CHK(SYS_PREDIV      , `PLL_CONN_SCU.pllsys_prediv_reg      , `PLL_CONN_SYS.PLL_SYS_CFG_0[28:24]      ,  5, 0)
   `PLL_CONN_CHK(SYS_DIS_SSCG    , `PLL_CONN_SCU.pllsys_disable_sscg_reg, `PLL_CONN_SYS.PLL_SYS_DIS_SSCG_TEMP     ,  1, 0)
   `PLL_CONN_CHK(SYS_TESTEN      , `PLL_CONN_SCU.pllsys_testen_reg      , `PLL_CONN_SYS.PLL_SYS_TESTEN_TEMP       ,  1, 0)
   `PLL_CONN_CHK(SYS_PD          , `PLL_CONN_SCU.pllsys_pd_reg          , `PLL_CONN_SYS.PLL_SYS_PWRON_TEMP        ,  1, 1)
-  `PLL_CONN_CHK(SYS_FBDIV       , `PLL_CONN_SCU.pllsys_fbdiv_reg       , `PLL_CONN_SYS.PLL_SYS_CFG_1[11:0]       , 12, 0)
-  `PLL_CONN_CHK(SYS_DACPD       , `PLL_CONN_SCU.pllsys_dacpd_reg       , `PLL_CONN_SYS.PLL_SYS_CFG_1[12]         ,  1, 0)
-  `PLL_CONN_CHK(SYS_DSMPD       , `PLL_CONN_SCU.pllsys_dsmpd_reg       , `PLL_CONN_SYS.PLL_SYS_CFG_1[13]         ,  1, 0)
   `PLL_CONN_CHK(SYS_TESTSEL     , `PLL_CONN_SCU.pllsys_testsel_reg     , `PLL_CONN_SYS.PLL_SYS_TESTSEL_TEMP      ,  2, 0)
-  `PLL_CONN_CHK(SYS_POSTDIV0_0  , `PLL_CONN_SCU.pllsys_postdiv0_0_reg  , `PLL_CONN_SYS.PLL_SYS_CFG_1[18:16]      ,  3, 0)
-  `PLL_CONN_CHK(SYS_POSTDIV0_1  , `PLL_CONN_SCU.pllsys_postdiv0_1_reg  , `PLL_CONN_SYS.PLL_SYS_CFG_1[21:19]      ,  3, 0)
-  `PLL_CONN_CHK(SYS_POSTDIV1_0  , `PLL_CONN_SCU.pllsys_postdiv1_0_reg  , `PLL_CONN_SYS.PLL_SYS_CFG_1[24:22]      ,  3, 0)
-  `PLL_CONN_CHK(SYS_POSTDIV1_1  , `PLL_CONN_SCU.pllsys_postdiv1_1_reg  , `PLL_CONN_SYS.PLL_SYS_CFG_1[27:25]      ,  3, 0)
   `PLL_CONN_CHK(SYS_SEL_EXTWAVE , `PLL_CONN_SCU.pllsys_sel_extwave_reg , `PLL_CONN_SYS.PLL_SYS_SEL_EXTWAVE_TEMP  ,  1, 0)
   `PLL_CONN_CHK(SYS_EXT_MAXADDR , `PLL_CONN_SCU.pllsys_ext_maxaddr_reg , `PLL_CONN_SYS.PLL_SYS_EXT_MAXADDR_TEMP  ,  8, 0)
   `PLL_CONN_CHK(SYS_EXTWAVEVAL  , `PLL_CONN_SCU.pllsys_extwaveval_reg  , `PLL_CONN_SYS.PLL_SYS_EXT_WAVEVAL_TEMP  ,  8, 0)
