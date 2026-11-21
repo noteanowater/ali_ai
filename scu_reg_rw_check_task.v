@@ -1,8 +1,9 @@
 //==============================================================================
 // SCU_REG default value / read-write check pattern
 //   - Reset values and writable bits derived from SCU_REG.v (RELEASE DATE 2026/11/20)
-//   - Usage: put in the same tb file / module as chip_top_task, then call
-//           scu_reg_check_task;
+//   - Usage: include in the tb module that instantiates es_spi_master, then call
+//           chip_top_task;
+//     (this file defines chip_top_task, remove/rename any other chip_top_task in the tb)
 //   - Assumption: 2nd arg of es_spi_master.ES_SPI_RD(addr, exp) is the expected value (compared inside)
 //
 // Group switches (only the safe group runs by default):
@@ -130,7 +131,7 @@ end
 endtask
 
 //==============================================================================
-task scu_reg_check_task;
+task chip_top_task;
 begin
   //============================================================================
   // STEP1 : read reset default value of all registers
