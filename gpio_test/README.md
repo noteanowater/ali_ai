@@ -13,13 +13,8 @@
    ```bash
    python3 gen_gpio_pad_map.py HS100_PinPad.xlsx --ext-shift -o chip_top_task.v
    ```
-2. **`GPIO_PCLK`**：gpio_top 的 pclk 层次路径（所有等待都按 pclk 拍数）。
-3. **`GPIO_INTR_SIG`**（可选）：定义后会同时检查 gpio_top 的 `gpio_intr` 输出线。
-
-```
-+define+GPIO_PCLK=test_chip_top.u_chip.u_gpio_top.pclk
-+define+GPIO_INTR_SIG=test_chip_top.u_chip.u_gpio_top.gpio_intr
-```
+2. **`GPIO_TOP_PATH`**：gpio_top 实例路径，默认 `test_chip_top.chip_top.core_aon.apb_subsystem_aon.u03_gpio_top`。
+   `GPIO_PCLK`（等待用的 pclk）和 `GPIO_INTR_SIG`（中断输出线检查）都由它派生；不想检查中断线就加 `+define+GPIO_NO_INTR_SIG`。
 
 ## 测试内容
 
@@ -41,6 +36,6 @@
 ## 特殊 pad
 
 * **GPIO_39**：没有 pad，所有检查都屏蔽。
-* **GPIO_31 = XGPIO_5**：pad IO 类型是 **I（只能输入）**，同时是 **TEST_MODE strap（L）**。输出检查跳过；输入检查默认一直驱动 0，避免进 DFT 模式。确认 TEST_MODE 只在复位时锁存之后，可以加 `+define+GPIO_TEST_STRAP_TESTMODE` 把它纳入输入测试。
+* **GPIO_31 = XGPIO_5**：是双向 pad，参与输出测试（PinPad 表 IO 列写的是 I，以实际为准）。它同时是 **TEST_MODE strap（L）**，输入测试默认一直驱动 0，避免进 DFT 模式。确认 TEST_MODE 只在复位时锁存之后，可以加 `+define+GPIO_TEST_STRAP_TESTMODE` 把它纳入输入测试。
 * **strap pad**（GPIO 24/28/29/30/48/49/50/52~55/60/61）：输出测试时 pad 由芯片驱动。如果 tb 用强驱动给 strap 赋值，这些 pad 会出现 X，要改成 pullup/pulldown。
 * **GPIO 32~36 = JTAG pad**：测试中会被 force，tb 里的 JTAG 模型不要同时驱动。

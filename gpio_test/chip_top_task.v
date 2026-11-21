@@ -19,11 +19,17 @@
 // ----------------------------------------------------------------------------
 // User configuration  (override with +define+ on the command line)
 // ----------------------------------------------------------------------------
-`ifndef GPIO_PCLK
-  // TODO: hierarchical path of gpio_top.pclk
-  `define GPIO_PCLK      test_chip_top.u_chip_top.u_gpio_top.pclk
+`ifndef GPIO_TOP_PATH
+  `define GPIO_TOP_PATH  test_chip_top.chip_top.core_aon.apb_subsystem_aon.u03_gpio_top
 `endif
-// `define GPIO_INTR_SIG test_chip_top.u_chip_top.u_gpio_top.gpio_intr  // define to check the interrupt line
+`ifndef GPIO_PCLK
+  `define GPIO_PCLK      `GPIO_TOP_PATH.pclk
+`endif
+`ifndef GPIO_NO_INTR_SIG
+`ifndef GPIO_INTR_SIG
+  `define GPIO_INTR_SIG  `GPIO_TOP_PATH.gpio_intr       // gpio_top interrupt output line
+`endif
+`endif
 // `define GPIO_TEST_STRAP_TESTMODE   // also drive GPIO_31 (XGPIO_5 = TEST_MODE strap) high in input tests
 // `define GPIO_DB_EXTCLK_TEST        // also run debounce on extclk (needs GPIO_EXTCLK_WAIT)
 `ifndef GPIO_EXTCLK_WAIT
@@ -534,8 +540,8 @@ endfunction
 // ----------------------------------------------------------------------------
 // Masks  (bit n = GPIO_n, 128 bits = 4 instances x 32)
 // ----------------------------------------------------------------------------
-// output check : pad exists and is not input-only (GPIO_31 / XGPIO_5 is input-only)
-wire [127:0] GPIO_OUT_CHK = GPIO_PAD_EXIST & ~GPIO_PAD_INONLY;
+// output check : every channel that has a pad (GPIO_31 / XGPIO_5 included, it is bidirectional)
+wire [127:0] GPIO_OUT_CHK = GPIO_PAD_EXIST;
 // input check  : GPIO_31 is the TEST_MODE strap -> keep it low unless allowed
 `ifdef GPIO_TEST_STRAP_TESTMODE
 wire [127:0] GPIO_IN_CHK  = GPIO_PAD_EXIST;
