@@ -6,86 +6,37 @@ SCU_REG 寄存器默认值 / 读写检查 —— 测试内容说明
 - RTL 依据：SCU_REG.v（RELEASE DATE 2026/11/20）
 - 访问方式：es_spi_master.ES_SPI_WR / ES_SPI_RD（SPI2APB）
 - 基地址：0xA000_C000
+- 写法：每次读写单独一行，期望值直接写在行内，可逐行修改。
 
 
-【一、编译开关】
-1. 不加任何宏：默认执行 STEP1、STEP2、STEP3。
-2. `define SCU_RW_PHY：打开 STEP4（DDR IO test / DDR PHY JTAG / USB PHY），默认关闭。
-3. `define SCU_RW_SYS：打开 STEP5（电源 / 时钟门控 / 复位 / PLL / 分频），默认关闭。
-4. `define SCU_BYTE_WR：打开 STEP6 按字节写测试，默认关闭；调用 es_spi_master.ES_SPI_WR_BE(addr, data, be)。STEP6 中属于 STEP4 / STEP5 的寄存器还需要同时打开对应的宏。
-
-【代码写法】
-- 不使用子 task / 循环 / 宏，每一次读写都是单独一行 ES_SPI_WR / ES_SPI_RD / ES_SPI_WR_BE，期望值直接写在行内，后续可直接逐行修改。
-- 每个寄存器的读写块前有一行注释，标明默认值和可写位 rw_mask。
-- 0x028 / 0x050 / 0x054 / 0x058 的期望值按第一次 rsim 读回值设置：0x0000_0007、0x3200_0701、0xA155_5555、0x0043_0053。
+【一、测试方法】
+按地址顺序，每个寄存器做 3 步：
+1. 读默认值，与 RTL reset 值比对。
+2. 写 0xFFFF_FFFF。
+3. 读回，期望值 = 默认值 | rw_mask（可写位读回 1，保留位 / 只读位保持原值）。
+每个寄存器前有一行注释，标明默认值和可写位 rw_mask。
+测试结束后不恢复默认值，寄存器的可写位保持全 1。
 
 
-【二、测试步骤】
-
-STEP1：默认值读检查（默认执行，154 个寄存器）
-- 读 SCU 全部已定义寄存器，与 RTL reset 值比对。
-- 只读字段的期望值按 TB 输入全 0 计算。
-
-STEP2：只读寄存器写保护检查（默认执行，43 个地址）
-- 27 个纯只读寄存器：写 0xFFFF_FFFF，读回值必须不变。
-  地址：0x000, 0x004, 0x028, 0x094, 0x0F4, 0x0F8, 0x114, 0x118, 0x11C, 0x120, 0x124, 0x128, 0x12C, 0x20C, 0x210, 0x214, 0x218, 0x21C, 0x220, 0x258, 0x25C, 0x264, 0x268, 0x270, 0x274, 0x27C, 0x280
-- 16 个未定义地址（hole）：写 0xFFFF_FFFF，读回必须为 0，用于检查地址译码。
-  地址：0x02C, 0x044, 0x04C, 0x09C, 0x0D0, 0x0D4, 0x0EC, 0x1A4, 0x1B0, 0x1D0, 0x1DC, 0x224, 0x22C, 0x284, 0x2BC, 0x2F0
-
-STEP3：安全组读写检查（默认执行，50 个寄存器）
-- DDR 版本号：0x0A0, 0x0A4
-- LVDS MUX / 控制 / PRBS seed：0x130 ~ 0x1A0，共 29 个
-- GMAC / BREATHE：0x1B4（GMAC_PHY_CTRL）, 0x1EC（GMAC_DPRAM_CFG）, 0x1F0（BREATHE_REG）
-- 总线 timeout 控制：0x254, 0x260, 0x26C, 0x278
-- 软件配置寄存器 SW_CFG_REG_0 ~ 11：0x2C0 ~ 0x2EC
-
-STEP4：PHY 读写检查（打开 SCU_RW_PHY 时执行，29 个寄存器）
-- DDR PHY JTAG：0x098
-- DDR IO 测试信号：0x0A8 ~ 0x0CC，共 10 个
-- USB3 DEV PHY 配置：0x0D8, 0x0DC, 0x0E0, 0x0E4, 0x0E8, 0x0F0
-- USB3 HOST0 PHY 配置：0x0FC, 0x100, 0x104, 0x108, 0x10C, 0x110
-- USB3 HOST1 PHY 配置：0x1F4, 0x1F8, 0x1FC, 0x200, 0x204, 0x208
-
-STEP5：系统级读写检查（打开 SCU_RW_SYS 时执行，29 个寄存器）
-- 电源 / 系统模式：0x008, 0x00C
-- 时钟门控：0x010, 0x014, 0x018, 0x01C, 0x020, 0x024
-- IP 复位：0x034, 0x038, 0x03C, 0x040
-- 晶振 / PLL：0x050 ~ 0x07C，共 10 个
-- 时钟分频：0x080, 0x084, 0x088, 0x08C, 0x090
-- 注意：会真实改变芯片行为，打开前需确认 SPI2APB 到 SCU 的访问路径不经过被关闭的时钟 / 复位域。
+【二、寄存器分类】
+1. 可读写寄存器（108 个）：读默认值 → 写全 F → 读期望值。
+   其中 0x008 ~ 0x090 的 29 个（电源 / 系统模式 / 时钟门控 / IP 复位 / 晶振 / PLL / 分频）会真实改变芯片行为，
+   写和回读两行放在 `ifdef SCU_RW_SYS 里，默认只读默认值不写。
+2. 纯只读寄存器（27 个）：读默认值 → 写全 F → 读回值必须不变。
+3. 只读默认值、不写的寄存器（19 个）：
+   - 0x030：CPU_RESET / CHIP_RESET / SYS_RESET（写会复位芯片 / 释放 CPU 复位）
+   - GMAC delay chain：0x1B8, 0x1BC, 0x1C0, 0x1C4, 0x1C8, 0x1CC, 0x1E0, 0x1E4, 0x1E8
+   - EMMC delay chain：0x230, 0x234, 0x238, 0x23C, 0x240, 0x244, 0x248, 0x24C, 0x250
+4. 未定义地址（16 个）：写全 F，读回必须为 0，用于检查地址译码。
+   0x02C, 0x044, 0x04C, 0x09C, 0x0D0, 0x0D4, 0x0EC, 0x1A4, 0x1B0, 0x1D0, 0x1DC, 0x224, 0x22C, 0x284, 0x2BC, 0x2F0
 
 
-【三、单个寄存器的检查方法】
-
-整字读写（STEP3 / STEP4 / STEP5）：
-1. 依次整字写 0xFFFF_FFFF、0x0000_0000、0x5A5A_5A5A、0xA5A5_A5A5。
-2. 每次写后读回，期望值 = (wdata & rw_mask) | (default & ~rw_mask)。
-   即：可写位读回写入值，保留位 / 只读位保持原值。
-3. 写回默认值并读回确认。
-
-按字节写（STEP6，对象与 STEP3 / STEP4 / STEP5 相同）：
-对 be = 0001、0010、0100、1000、0011、1100、0101、1010 依次执行：
-1. 整字写默认值。
-2. 按 be 写入 ~default。
-3. 读回，期望值 = default ^ (rw_mask & byte_mask(be))。
-   即：只有使能字节内的可写位翻转；未使能字节、保留位、只读位保持不变。
-   同时检查跨字节字段（如 cke_dj_reg、u3dev_los_bias_reg）的字节拆分是否正确。
-最后写回默认值并读回确认。
-
-
-【四、任何模式下都不写的寄存器（只在 STEP1 读默认值）】
-- 0x030：CPU_RESET / CHIP_RESET / SYS_RESET（写 0 会复位芯片）
-- GMAC delay chain 配置：0x1B8, 0x1BC, 0x1C0, 0x1C4, 0x1C8, 0x1CC
-- GMAC delay chain 状态：0x1E0, 0x1E4, 0x1E8
-- EMMC delay chain 配置：0x230, 0x234, 0x238, 0x23C, 0x240, 0x244
-- EMMC delay chain 状态：0x248, 0x24C, 0x250
-
-
-【五、注意事项】
+【三、注意事项】
 1. 假设 ES_SPI_RD(addr, exp) 的第二个参数是期望值，在 task 内部比对。
-2. 0x028 / 0x050 / 0x054 / 0x058 的只读字段已按 rsim 实测值设置；其余只读字段期望值按 TB 输入全 0 计算；TB 有 tie 值时直接修改对应行的期望值（CHIP_ID、PLL_LOCK、WFI、OSC 状态、USB OBS、*_DT 回读等）。
+2. 0x028 / 0x050 / 0x054 / 0x058 的只读字段已按 rsim 实测值设置（0x0000_0007、0x3200_0701、0xA155_5555、0x0043_0053）；
+   其余只读字段按 TB 输入全 0 计算，TB 有 tie 值时直接修改对应行的期望值。
 3. 0x00C 默认值为 0x0001_0005（xip_en[16] 复位值为 1），不是 0x0000_0005。
 4. 0x050 的 OSC 状态位（[29:24]）会随晶振起振变化，读的时刻不同结果可能不同。
-5. STEP3 总线 timeout 测试期间 timeout_en / error_resp_en 会短暂被置 1，若同时有其它总线访问超时会报错；测试结束已恢复默认值。
+5. 写全 F 后部分功能会被打开（如总线 timeout_en / error_resp_en、USB PHY 测试位、LVDS PRBS 等），且测试结束不恢复。
+   如果 chip_top_task 之后还有其它测试，需要先把这些寄存器写回默认值。
 6. 本文件定义了 chip_top_task，tb 中原有同名 task 需删除或改名。
-7. 未覆盖：walking-1 逐位测试。
