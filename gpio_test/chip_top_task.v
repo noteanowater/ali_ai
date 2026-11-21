@@ -550,8 +550,54 @@ wire [127:0] GPIO_OUT_CHK = GPIO_PAD_EXIST;
 // input check  : every channel that has a pad (strap pins are only sampled at reset release)
 wire [127:0] GPIO_IN_CHK  = GPIO_PAD_EXIST;
 
-integer gpio_err_cnt;
-initial gpio_err_cnt = 0;
+integer gpio_err_cnt;                 // every mismatch: pad, interrupt line, register read
+integer gpio_pad_err_cnt;             //   pad level mismatches
+integer gpio_intr_err_cnt;            //   gpio_intr line mismatches
+integer gpio_reg_err_cnt;             //   register read mismatches
+integer gpio_reg_rd_cnt;              // register reads checked
+initial begin
+    gpio_err_cnt = 0; gpio_pad_err_cnt = 0; gpio_intr_err_cnt = 0;
+    gpio_reg_err_cnt = 0; gpio_reg_rd_cnt = 0;
+end
+
+// ----------------------------------------------------------------------------
+// APB read monitor on gpio_top : captures prdata of every completed read
+// (independent of the a45_io_read32b BFM, so the pattern checks every read itself)
+// ----------------------------------------------------------------------------
+reg  [31:0] gpio_apb_rdata;
+reg  [9:0]  gpio_apb_raddr;
+integer     gpio_apb_rd_seen;
+initial gpio_apb_rd_seen = 0;
+always @(posedge `GPIO_PCLK)
+    if (`GPIO_TOP_PATH.psel && `GPIO_TOP_PATH.penable && !`GPIO_TOP_PATH.pwrite && `GPIO_TOP_PATH.pready) begin
+        gpio_apb_rdata   = `GPIO_TOP_PATH.prdata;
+        gpio_apb_raddr   = `GPIO_TOP_PATH.paddr[9:0];
+        gpio_apb_rd_seen = gpio_apb_rd_seen + 1;
+    end
+
+function [8*12:1] gpio_reg_name;
+input [7:0] off;
+begin
+    case (off)
+    8'h00 : gpio_reg_name = "IdRev";
+    8'h10 : gpio_reg_name = "Config";
+    8'h20 : gpio_reg_name = "DataIn";
+    8'h24 : gpio_reg_name = "DataOut";
+    8'h28 : gpio_reg_name = "ChannelDir";
+    8'h2C : gpio_reg_name = "DoutClear";
+    8'h30 : gpio_reg_name = "DoutSet";
+    8'h50 : gpio_reg_name = "IntrEn";
+    8'h54 : gpio_reg_name = "IntrMode0";
+    8'h58 : gpio_reg_name = "IntrMode1";
+    8'h5C : gpio_reg_name = "IntrMode2";
+    8'h60 : gpio_reg_name = "IntrMode3";
+    8'h64 : gpio_reg_name = "IntrStatus";
+    8'h70 : gpio_reg_name = "DebounceEn";
+    8'h74 : gpio_reg_name = "DebounceCtl";
+    default : gpio_reg_name = "<hole>";
+    endcase
+end
+endfunction
 
 // ----------------------------------------------------------------------------
 // Basic helpers
@@ -584,13 +630,45 @@ input [1:0]  g;
 input [31:0] off;
 input [31:0] mask;
 input [31:0] exp;
+integer      seen0, b, ch;
+reg   [31:0] diff;
 begin
+    seen0 = gpio_apb_rd_seen;
     case (g)
     2'd0 : a45_io_read32b(IOBASE_GPIO0, off, mask, exp);
     2'd1 : a45_io_read32b(IOBASE_GPIO1, off, mask, exp);
     2'd2 : a45_io_read32b(IOBASE_GPIO2, off, mask, exp);
     2'd3 : a45_io_read32b(IOBASE_GPIO3, off, mask, exp);
     endcase
+    #1;
+    gpio_reg_rd_cnt = gpio_reg_rd_cnt + 1;
+    if (gpio_apb_rd_seen == seen0) begin
+        gpio_reg_err_cnt = gpio_reg_err_cnt + 1;  gpio_err_cnt = gpio_err_cnt + 1;
+        $display("    at %t, Error : REG GPIO%0d %0s (0x%02h) : no APB read seen at gpio_top",
+                 $time, g, gpio_reg_name(off[7:0]), off[7:0]);
+    end
+    else if (gpio_apb_raddr !== {g, off[7:0]}) begin
+        gpio_reg_err_cnt = gpio_reg_err_cnt + 1;  gpio_err_cnt = gpio_err_cnt + 1;
+        $display("    at %t, Error : REG GPIO%0d %0s (0x%02h) : read went to paddr[9:0] = 0x%03h",
+                 $time, g, gpio_reg_name(off[7:0]), off[7:0], gpio_apb_raddr);
+    end
+    else begin
+        diff = (gpio_apb_rdata ^ exp) & mask;
+        if (diff !== 32'b0) begin
+            gpio_reg_err_cnt = gpio_reg_err_cnt + 1;  gpio_err_cnt = gpio_err_cnt + 1;
+            $display("    at %t, Error : REG GPIO%0d %0s (0x%02h) = 0x%08h, expect 0x%08h, mask 0x%08h, diff 0x%08h",
+                     $time, g, gpio_reg_name(off[7:0]), off[7:0], gpio_apb_rdata, exp & mask, mask, diff);
+            // per-channel registers : name the GPIO / pad of every wrong bit
+            if (off[7:0] == 8'h20 || off[7:0] == 8'h24 || off[7:0] == 8'h28 ||
+                off[7:0] == 8'h50 || off[7:0] == 8'h64 || off[7:0] == 8'h70)
+                for (b = 0; b < 32; b = b + 1)
+                    if (diff[b] !== 1'b0) begin
+                        ch = 32 * g + b;
+                        $display("        GPIO_%0d pad %0s : read %b, expect %b",
+                                 ch, gpio_pad_name(ch), gpio_apb_rdata[b], exp[b]);
+                    end
+        end
+    end
 end
 endtask
 
@@ -634,7 +712,7 @@ begin
     if (diff !== 128'b0) begin
         for (k = 0; k < 111; k = k + 1)
             if (mask[k] && (gpio_pad_obs[k] !== exp[k])) begin
-                gpio_err_cnt = gpio_err_cnt + 1;
+                gpio_err_cnt = gpio_err_cnt + 1;  gpio_pad_err_cnt = gpio_pad_err_cnt + 1;
                 $display("    at %t, Error : %0s : GPIO_%0d pad %0s = %b, expect %b",
                          $time, tag, k, gpio_pad_name(k), gpio_pad_obs[k], exp[k]);
             end
@@ -656,7 +734,7 @@ input [8*48:1]   tag;
 begin
 `ifdef GPIO_INTR_SIG
     if (`GPIO_INTR_SIG !== exp) begin
-        gpio_err_cnt = gpio_err_cnt + 1;
+        gpio_err_cnt = gpio_err_cnt + 1;  gpio_intr_err_cnt = gpio_intr_err_cnt + 1;
         $display("    at %t, Error : %0s : gpio_intr = %b, expect %b", $time, tag, `GPIO_INTR_SIG, exp);
     end
 `endif
@@ -1185,10 +1263,12 @@ $display ("Step 10 -- Hole address ... %t", $time);
 // ----------------------------------------------------------------------------
     gpio_pad_drv = 128'b0;
     gpio_pad_release_all;
+    $display ("at %t, GPIO TEST Summary : %0d register reads checked, errors : register %0d, pad %0d, gpio_intr %0d",
+              $time, gpio_reg_rd_cnt, gpio_reg_err_cnt, gpio_pad_err_cnt, gpio_intr_err_cnt);
     if (gpio_err_cnt == 0)
-        $display ("at %t, GPIO TEST End : pad/intr-line checks PASS (register compares: see a45_io_read32b log)", $time);
+        $display ("at %t, GPIO TEST End : PASS", $time);
     else
-        $display ("at %t, GPIO TEST End : Error : %0d pad/intr-line mismatches", $time, gpio_err_cnt);
+        $display ("at %t, GPIO TEST End : FAIL, %0d errors", $time, gpio_err_cnt);
 
 end
 endtask
