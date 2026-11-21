@@ -8,9 +8,10 @@
 
 ## 使用前要改的 3 处
 
-1. **pad 在 tb 中的层次名**：默认 `test_chip_top.<Pin Name>`（如 `test_chip_top.XLSYNC3`）。不同的话重新生成：
+1. **pad 层次名**：默认 `test_chip_top.EXT_XGPIO_<GPIO号>`（tb 中 `tranif1(EXT_XGPIO_n, <Pin>, ... & <Pin>_SEL_000)`）。
+   如果 EXT_XGPIO 的编号跳过了不存在的 GPIO_39（即 EXT_XGPIO_39 = GPIO_40 … EXT_XGPIO_109 = GPIO_110），加 `--ext-shift` 重新生成：
    ```bash
-   python3 gen_gpio_pad_map.py HS100_PinPad.xlsx --fmt "test_chip_top.{pin}" -o gpio_pad_map.vh
+   python3 gen_gpio_pad_map.py HS100_PinPad.xlsx --ext-shift -o gpio_pad_map.vh
    ```
 2. **`GPIO_PCLK`**：gpio_top 的 pclk 层次路径（所有等待都按 pclk 拍数）。
 3. **`GPIO_INTR_SIG`**（可选）：定义后会同时检查 gpio_top 的 `gpio_intr` 输出线。
