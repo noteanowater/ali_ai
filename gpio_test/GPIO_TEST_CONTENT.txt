@@ -15,15 +15,15 @@
     0x54~0x60 IntrMode0~3               0x64 IntrStatus（写 1 清除）
     0x70 DebounceEn   0x74 DebounceCtl
 
-二、检查方式（所有检查都计入错误总数）
+二、检查方式
 ----------------------------------------------------------------------------
-  1. 寄存器检查：每次读都经过 a45_io_read32b，同时 pattern 在 gpio_top 的
-     APB 端口抓 prdata 自己再比一次，并检查：
-       - 这次读确实到达了 gpio_top
-       - 读的是正确的实例和偏移（paddr[9:0] = {实例号, 偏移}）
-       - 读回值按 mask 与期望一致
-  2. pad 检查：直接看 EXT_XGPIO_n 的电平，x / z 也算错。
-  3. 中断线检查：看 gpio_top 的 gpio_intr 输出。
+  寄存器读写全部直接调用 a45_io_write32b / a45_io_read32b，写在 chip_top_task
+  里；逐通道测试时只写当前通道所在的那一组，其他组只配置一次。
+
+  1. 寄存器检查：a45_io_read32b(base, offset, mask, expect) 自己比对并打印错误，
+     不计入本 pattern 的汇总。
+  2. pad 检查：直接看 EXT_XGPIO_n 的电平，x / z 也算错，计入汇总。
+  3. 中断线检查：看 gpio_top 的 gpio_intr 输出，计入汇总。
 
 三、测试步骤
 ----------------------------------------------------------------------------
@@ -147,13 +147,14 @@ Step 10 空洞地址
 四、结果判定
 ----------------------------------------------------------------------------
   仿真最后打印：
-    GPIO TEST Summary : N register reads checked, errors : register x, pad y, gpio_intr z
-    GPIO TEST End : PASS          （或 FAIL, N errors）
+    GPIO TEST Summary : pad errors x, gpio_intr errors y (register read errors are reported by a45_io_read32b)
+    GPIO TEST End : pad / gpio_intr checks PASS      （或 FAIL, N pad / gpio_intr errors）
 
-  通过标准：看到 "GPIO TEST End : PASS"。
+  通过标准：
+    - 看到 "GPIO TEST End : pad / gpio_intr checks PASS"
+    - 并且 log 中没有 a45_io_read32b 打印的寄存器 Error
   没有出现 "GPIO TEST End" 这一行（仿真卡住或提前退出）应判为失败。
-  tb 其他组件（BFM 超时、assertion 等）打印的 Error 不在本 pattern 统计内，
-  回归时需要一起 grep。
+  tb 其他组件（BFM 超时、assertion 等）打印的 Error 也需要一起 grep。
 
 五、开关
 ----------------------------------------------------------------------------

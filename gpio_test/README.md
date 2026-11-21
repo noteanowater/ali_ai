@@ -10,12 +10,18 @@
 1. **替换文件**：用 `chip_top_task.v` 覆盖原来的 pattern 文件。task 名还是 `chip_top_task`，tb 里调用它的地方不用改。原 pattern 里的 `GPIO_FORCE_VALUE`、`gpio_pad_value`、`EXT_GPIO_GROUP0~3` 都不再需要，删掉。
 2. **放的位置**：和原来一样，在 `test_chip_top` 模块这一层 `include`，不能放进 `initial` 或 task 里面。文件里会直接用到 tb 里已有的 `a45_io_write32b`、`a45_io_read32b`、`IOBASE_GPIO0~3`、`IOBASE_PINMUX`。
 3. **调用时机**：在复位释放之后、其他代码还没动过 GPIO 之前调用 `chip_top_task`。如果之前已经有代码写过 GPIO 寄存器，加 `+define+GPIO_NO_RESET_CHK`。
-4. **看结果**：最后两行是汇总，所有检查（寄存器读、pad、gpio_intr 线）都计入：
+4. **看结果**：
    ```
-   GPIO TEST Summary : 4560 register reads checked, errors : register 0, pad 0, gpio_intr 0
-   GPIO TEST End : PASS          （或 FAIL, N errors）
+   GPIO TEST Summary : pad errors 0, gpio_intr errors 0 (register read errors are reported by a45_io_read32b)
+   GPIO TEST End : pad / gpio_intr checks PASS        （或 FAIL, N pad / gpio_intr errors）
    ```
-   出错时 `grep -i error` 仿真 log，再根据前面最近的 `Step x-x` 判断是哪一步出的错。
+   寄存器读比对的错误由 `a45_io_read32b` 自己打印，不计入上面的汇总。判定时要同时看汇总行和 log 里的寄存器 Error，`grep -i error` 仿真 log 即可。
+
+## 代码结构
+
+* 寄存器读写全部直接调用 `a45_io_write32b` / `a45_io_read32b`，写在 `chip_top_task` 里，没有再包一层 task。基地址用 `gpio_base[0..3]`（= `IOBASE_GPIO0~3`）按组号选择。
+* 逐通道测试时只写当前通道所在的那一组；换到下一组时把上一组恢复一次，其他组只在开头配置一次。
+* 保留的辅助 task 只做等待和 pad / 中断线检查，不访问寄存器：`gpio_wait_clk`、`gpio_chk_pad`、`gpio_chk_pad_mask`、`gpio_chk_intr_line`，以及映射区段里的 `gpio_pad_force_all` / `gpio_pad_release_all`。
 
 ## 路径设置
 
@@ -42,10 +48,10 @@
 
 * **寄存器偏移**：`0x20` DataIn、`0x24` DataOut、`0x28` 方向寄存器（1 = 输出）、`0x2C` 清零 DataOut、`0x30` 置位 DataOut、`0x50` 中断使能、`0x54~0x60` 中断模式、`0x64` 中断状态（写 1 清除）、`0x70` debounce 使能、`0x74` debounce 控制。
 * **"全部通道"**：指 110 个有 pad 的 GPIO，即 GPIO_0~110 去掉 GPIO_39。
-* **三类检查，全部计入 `gpio_err_cnt`**：
-  * 寄存器检查：每次读都经过 `a45_io_read32b`，同时 pattern 在 gpio_top 的 APB 端口抓 `prdata` 自己再比一次；还检查这次读确实到达了 gpio_top、而且落在正确的实例和偏移上。
-  * pad 检查：直接看 `EXT_XGPIO_n` 的电平（x/z 也算错）。
-  * 中断线检查：看 gpio_top 的 `gpio_intr`。
+* **三类检查**：
+  * 寄存器检查：直接调用 `a45_io_read32b` 比对，错误由它自己打印（不计入汇总）。
+  * pad 检查：直接看 `EXT_XGPIO_n` 的电平（x/z 也算错），计入汇总。
+  * 中断线检查：看 gpio_top 的 `gpio_intr`，计入汇总。
 
 ### Step 1：ID / 配置寄存器 / 复位值
 **目的**：确认 4 组 GPIO 都在、配置正确、复位后是干净状态。
@@ -160,15 +166,12 @@
 | 再读哨兵和 0x24、0x74 | 哨兵值不变，0x24、0x74 为 0 | 写空洞地址时别名到了真实寄存器 |
 
 ### 结束
-* 放开所有 pad，打印汇总：检查了多少次寄存器读，寄存器 / pad / gpio_intr 各错多少，最后 `PASS` 或 `FAIL, N errors`。
+* 放开所有 pad，打印汇总：pad / gpio_intr 各错多少，最后 `PASS` 或 `FAIL`。寄存器读错误看 `a45_io_read32b` 的打印。
 
 ### 报错格式
 | 类型 | 示例 |
 |---|---|
-| 寄存器值不对 | `Error : REG GPIO0 IntrStatus (0x64) = 0x00000010, expect 0x00000008, mask 0xffffffff, diff 0x00000018` |
-| 按通道的寄存器（DataIn/DataOut/ChannelDir/IntrEn/IntrStatus/DebounceEn）会再列出错的通道 | `GPIO_3 pad EXT_XGPIO_3/XLSYNC0 : read 0, expect 1` |
-| 读没有到达 gpio_top | `Error : REG GPIO1 DataIn (0x20) : no APB read seen at gpio_top` |
-| 读到了别的实例或偏移 | `Error : REG GPIO1 DataIn (0x20) : read went to paddr[9:0] = 0x020` |
+| 寄存器值不对 | 由 `a45_io_read32b` 打印，格式按 BFM |
 | pad 电平不对 | `Error : OUT walking-1 : GPIO_5 pad EXT_XGPIO_5/XPSYNC2 = 0, expect 1` |
 | 中断线不对 | `Error : map set : gpio_intr = 0, expect 1` |
 
