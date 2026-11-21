@@ -9,6 +9,9 @@
 //   `define SCU_RW_PHY  : DDR IO 测试 / DDR PHY JTAG / USB PHY 配置寄存器读写
 //   `define SCU_RW_SYS  : 电源/时钟门控/复位/PLL/分频 寄存器读写 (会影响系统, 慎用)
 //   0x30 (CPU_RESET/CHIP_RESET/SYS_RESET) 任何模式下都只读不写
+//   Delay chain 相关寄存器任何模式下都只读不写 (只在 STEP1 读默认值):
+//     GMAC : 0x1B8 ~ 0x1CC (CTRL/TEN_S_TIME/DLY_DEFAULT/DLY_TARGET), 0x1E0 ~ 0x1E8 (状态)
+//     EMMC : 0x230 ~ 0x244 (CTRL/TEN_S_TIME/DLY_DEFAULT/DLY_TARGET), 0x248 ~ 0x250 (状态)
 //
 // 注意: RO 字段的期望值按 TB 输入全为 0 计算, 若 TB 有 tie 值(如 CHIP_ID、
 //       PLL_LOCK、WFI 等), 请修改下面的 `SCU_RO_xxx 宏或对应期望值。
@@ -252,18 +255,12 @@ begin
   scu_ro_chk(32'h124, 32'h0);
   scu_ro_chk(32'h128, 32'h0);
   scu_ro_chk(32'h12C, 32'h0);
-  scu_ro_chk(32'h1E0, 32'h0);
-  scu_ro_chk(32'h1E4, 32'h0);
-  scu_ro_chk(32'h1E8, 32'h0);
   scu_ro_chk(32'h20C, 32'h0);
   scu_ro_chk(32'h210, 32'h0);
   scu_ro_chk(32'h214, 32'h0);
   scu_ro_chk(32'h218, 32'h0);
   scu_ro_chk(32'h21C, 32'h0);
   scu_ro_chk(32'h220, 32'h0);
-  scu_ro_chk(32'h248, 32'h0);
-  scu_ro_chk(32'h24C, 32'h0);
-  scu_ro_chk(32'h250, 32'h0);
   scu_ro_chk(32'h258, 32'h0);
   scu_ro_chk(32'h25C, 32'h0);
   scu_ro_chk(32'h264, 32'h0);
@@ -330,21 +327,8 @@ begin
   scu_rw_chk(32'h1A0, 32'h0000_0000, 32'h0000_0303); // LVDS_RX_PRBS_CTRL
 
   scu_rw_chk(32'h1B4, 32'h0000_0000, 32'h0000_003F); // GMAC_PHY_CTRL
-  scu_rw_chk(32'h1B8, 32'h0000_0000, 32'h0000_013F); // GMAC_DELAY_CHAIN_CTRL
-  scu_rw_chk(32'h1BC, 32'h0000_0000, 32'h01FF_FFFF); // TEN_S_TIME
-  scu_rw_chk(32'h1C0, 32'h0000_0000, 32'h003F_FFFF); // RGMII_DLY_DEFAULT0
-  scu_rw_chk(32'h1C4, 32'h0000_0000, 32'h000F_FFFF); // RGMII_DLY_DEFAULT1
-  scu_rw_chk(32'h1C8, 32'h0000_0000, 32'h07FF_FFFF); // RGMII_TX_DLY_TARGET
-  scu_rw_chk(32'h1CC, 32'h0000_0000, 32'h07FF_FFFF); // RGMII_RX_DLY_TARGET
   scu_rw_chk(32'h1EC, 32'h0208_0208, 32'h1FFF_1FFF); // GMAC_DPRAM_CFG
   scu_rw_chk(32'h1F0, 32'h0000_0000, 32'h0FFF_FFFF); // BREATHE_REG
-
-  scu_rw_chk(32'h230, 32'h0000_0102, 32'h0000_013F); // EMMC_DELAY_CHAIN_CTRL
-  scu_rw_chk(32'h234, 32'h0000_0000, 32'h01FF_FFFF); // EMMC_TEN_S_TIME
-  scu_rw_chk(32'h238, 32'h0000_0000, 32'h001F_FFFF); // EMMC_DLY_DEFAULT0
-  scu_rw_chk(32'h23C, 32'h0000_0000, 32'h0000_001F); // EMMC_DLY_DEFAULT1
-  scu_rw_chk(32'h240, 32'h0000_0000, 32'h07FF_FFFF); // EMMC_CLK_OUT_DLY_TARGET
-  scu_rw_chk(32'h244, 32'h0000_0000, 32'h07FF_FFFF); // EMMC_STB_IN_DLY_TARGET
 
   // 总线 timeout 控制: 打开 timeout_en/error_resp_en 期间如有其它总线访问超时会报错, 结束后已恢复默认
   scu_rw_chk(32'h254, 32'h0000_0000, 32'h007F_FFFF); // AHB_MAIN_BUS_TIMEOUT_CTRL
