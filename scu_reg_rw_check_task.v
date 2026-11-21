@@ -8,6 +8,9 @@
 // Group switches (only the safe group runs by default):
 //   `define SCU_RW_PHY  : RW test of DDR IO test / DDR PHY JTAG / USB PHY config registers
 //   `define SCU_RW_SYS  : RW test of power/clock gate/reset/PLL/divider registers (affects system, use with care)
+//   `define SCU_BYTE_WR : add byte-enable write test to every register covered by scu_rw_chk
+//                         (STEP3, plus STEP4/STEP5 when enabled). Needs a byte-enable write task,
+//                         mapped through the `SCU_WR_BE(addr, data, be) macro below.
 //   0x30 (CPU_RESET/CHIP_RESET/SYS_RESET) is read-only in all modes, never written
 //   Delay chain registers are read-only in all modes, never written (default read in STEP1 only):
 //     GMAC : 0x1B8 ~ 0x1CC (CTRL/TEN_S_TIME/DLY_DEFAULT/DLY_TARGET), 0x1E0 ~ 0x1E8 (status)
@@ -18,6 +21,12 @@
 //==============================================================================
 `ifndef SCU_BASE
 `define SCU_BASE        32'ha000_c000
+`endif
+// Byte-enable write hook: be[3:0] = byte lanes to write (be[0] -> data[7:0]).
+// Default maps to es_spi_master.ES_SPI_WR_BE; redefine before including this file
+// if the SPI master task has a different name/argument order.
+`ifndef SCU_WR_BE
+`define SCU_WR_BE(addr, data, be) es_spi_master.ES_SPI_WR_BE(addr, data, be)
 `endif
 `ifndef SCU_RO_CHIP_ID1
 `define SCU_RO_CHIP_ID1 32'h0000_0000   // SYS_CHIP_ID_RPT1
@@ -61,8 +70,52 @@ begin
   end
   es_spi_master.ES_SPI_WR(`SCU_BASE + ofs, def);
   es_spi_master.ES_SPI_RD(`SCU_BASE + ofs, def);
+`ifdef SCU_BYTE_WR
+  scu_byte_chk(ofs, def, msk);
+`endif
 end
 endtask
+
+`ifdef SCU_BYTE_WR
+//------------------------------------------------------------------------------
+// Byte-enable write check:
+//   for each be in {0001,0010,0100,1000,0011,1100,0101,1010}:
+//     write default (full word) -> byte write ~default with be -> read back
+//     expected = default ^ (msk & byte_mask(be))
+//       i.e. only RW bits inside enabled byte lanes toggle; disabled lanes and
+//       RO/reserved bits keep their value. Fields crossing byte lanes are checked
+//       per lane.
+//   finally write the default value back and read to confirm
+//------------------------------------------------------------------------------
+task scu_byte_chk;
+  input [31:0] ofs;
+  input [31:0] def;
+  input [31:0] msk;
+  reg   [3:0]  be;
+  reg   [31:0] bm;
+  integer      j;
+begin
+  for (j = 0; j < 8; j = j + 1) begin
+    case (j)
+      0: be = 4'b0001;
+      1: be = 4'b0010;
+      2: be = 4'b0100;
+      3: be = 4'b1000;
+      4: be = 4'b0011;
+      5: be = 4'b1100;
+      6: be = 4'b0101;
+      default: be = 4'b1010;
+    endcase
+    bm = {{8{be[3]}}, {8{be[2]}}, {8{be[1]}}, {8{be[0]}}};
+    es_spi_master.ES_SPI_WR(`SCU_BASE + ofs, def);
+    `SCU_WR_BE(`SCU_BASE + ofs, ~def, be);
+    es_spi_master.ES_SPI_RD(`SCU_BASE + ofs, def ^ (msk & bm));
+  end
+  es_spi_master.ES_SPI_WR(`SCU_BASE + ofs, def);
+  es_spi_master.ES_SPI_RD(`SCU_BASE + ofs, def);
+end
+endtask
+`endif
 
 //------------------------------------------------------------------------------
 // RO check: write all 1s, read back, value must not change
