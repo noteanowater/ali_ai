@@ -19,7 +19,6 @@
 
 | define | 作用 |
 |---|---|
-| `GPIO_ONLY_DB` | 只跑 PINMUX + Step 9（debounce） |
 | `GPIO_NO_DB_PER_CH` | 跳过 Step 9-5 逐通道 debounce |
 | `GPIO_DB_EXTCLK_TEST` | 加跑 Step 9-6：extclk 作 debounce 时钟（配合 `GPIO_EXTCLK_WAIT`） |
 | `GPIO_NO_INTR_SIG` | 不检查 gpio_intr 输出线 |

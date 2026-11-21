@@ -33,7 +33,6 @@
 `endif
 `endif
 // `define GPIO_DB_EXTCLK_TEST        // also run debounce on extclk (needs GPIO_EXTCLK_WAIT)
-// `define GPIO_ONLY_DB               // run only PINMUX + Step 9 (debounce), skip all other steps
 // `define GPIO_NO_DB_PER_CH          // skip Step 9-5 (per-channel debounce test)
 // `define GPIO_NO_RESET_CHK          // skip reset-value check (if GPIO was touched before this task)
 `ifndef GPIO_EXTCLK_WAIT
@@ -784,7 +783,6 @@ begin
 $display ("at %t, GPIO TEST Begin ...", $time);
 gpio_pad_release_all;
 
-`ifndef GPIO_ONLY_DB
 // ----------------------------------------------------------------------------
 $display ("Step 1 -- ID / Configuration register ... %t", $time);
     for (g = 0; g < 4; g = g + 1) begin
@@ -806,7 +804,6 @@ $display ("Step 1 -- ID / Configuration register ... %t", $time);
         gpio_rd(g, 32'h74, 32'hFFFF_FFFF, 32'h0);           // DebounceCtrl
     end
 `endif
-`endif
 
 // ----------------------------------------------------------------------------
 $display ("Step 2 -- PINMUX select GPIO function ... %t", $time);
@@ -819,7 +816,6 @@ $display ("Step 2 -- PINMUX select GPIO function ... %t", $time);
         a45_io_write32b(IOBASE_PINMUX, off, 32'h0190_0190);
     #100;
 
-`ifndef GPIO_ONLY_DB
 // ----------------------------------------------------------------------------
 $display ("Step 3 -- Register R/W ... %t", $time);
     for (g = 0; g < 4; g = g + 1) begin
@@ -841,15 +837,20 @@ $display ("Step 3 -- Register R/W ... %t", $time);
     end
 
     $display ("  Step 3-1 -- 4 instances are independent (no APB select aliasing) ... %t", $time);
-    for (g = 0; g < 4; g = g + 1) begin
-        gpio_wr(g, 32'h28, 32'h1111_1111 * (g + 1));
-        gpio_wr(g, 32'h50, 32'hA5A5_0000 | (32'h0101 << g));
-        gpio_wr(g, 32'h70, ~(32'h1111_1111 * (g + 1)));
-    end
-    for (g = 0; g < 4; g = g + 1) begin
-        gpio_rd(g, 32'h28, 32'hFFFF_FFFF, 32'h1111_1111 * (g + 1));
-        gpio_rd(g, 32'h50, 32'hFFFF_FFFF, 32'hA5A5_0000 | (32'h0101 << g));
-        gpio_rd(g, 32'h70, 32'hFFFF_FFFF, ~(32'h1111_1111 * (g + 1)));
+    // write order 0->3 catches a write to a higher instance leaking downwards,
+    // write order 3->0 catches a write to a lower instance leaking upwards
+    for (k = 0; k < 2; k = k + 1) begin
+        for (n = 0; n < 4; n = n + 1) begin
+            g = (k == 0) ? n : 3 - n;
+            gpio_wr(g, 32'h28, 32'h1111_1111 * (g + 1) ^ {32{k[0]}});
+            gpio_wr(g, 32'h50, (32'hA5A5_0000 | (32'h0101 << g)) ^ {32{k[0]}});
+            gpio_wr(g, 32'h70, ~(32'h1111_1111 * (g + 1)) ^ {32{k[0]}});
+        end
+        for (g = 0; g < 4; g = g + 1) begin
+            gpio_rd(g, 32'h28, 32'hFFFF_FFFF, 32'h1111_1111 * (g + 1) ^ {32{k[0]}});
+            gpio_rd(g, 32'h50, 32'hFFFF_FFFF, (32'hA5A5_0000 | (32'h0101 << g)) ^ {32{k[0]}});
+            gpio_rd(g, 32'h70, 32'hFFFF_FFFF, ~(32'h1111_1111 * (g + 1)) ^ {32{k[0]}});
+        end
     end
     gpio_wr_all(32'h28, 32'h0);
     gpio_wr_all(32'h50, 32'h0);
@@ -1067,7 +1068,6 @@ $display ("Step 8 -- INTERRUPT : enable mask ... %t", $time);
     gpio_wait_clk(`GPIO_SYNC_CLK);
     gpio_wr_all(32'h64, 32'hFFFF_FFFF);
     gpio_wr_vec(32'h24, 128'b0);
-`endif // GPIO_ONLY_DB
 
 // ----------------------------------------------------------------------------
 $display ("Step 9 -- DE-BOUNCE (db_clk = pclk, period = %0d pclk) ... %t", `GPIO_DB_PERIOD, $time);
@@ -1153,7 +1153,6 @@ $display ("Step 9 -- DE-BOUNCE (db_clk = pclk, period = %0d pclk) ... %t", `GPIO
     gpio_wr_all(32'h64, 32'hFFFF_FFFF);
     gpio_wr_all(32'h74, 32'h0);
 
-`ifndef GPIO_ONLY_DB
 // ----------------------------------------------------------------------------
 $display ("Step 10 -- Hole address ... %t", $time);
     // decoded : 00 10 20 24 28 2C 30 50 54 58 5C 60 64 70 74 (PULL not configured: 40/44 are holes)
@@ -1182,7 +1181,6 @@ $display ("Step 10 -- Hole address ... %t", $time);
     gpio_wr_all(32'h70, 32'h0);
     gpio_wr_all(32'h28, 32'h0);
     gpio_wr_all(32'h64, 32'hFFFF_FFFF);
-`endif // GPIO_ONLY_DB
 
 // ----------------------------------------------------------------------------
     gpio_pad_drv = 128'b0;
