@@ -15,6 +15,7 @@ SCU_REG 寄存器默认值 / 读写检查 —— 测试内容说明
 4. `define SCU_BYTE_WR：对所有做读写测试的寄存器追加按字节写测试，默认关闭。
 5. 宏 SCU_WR_BE(addr, data, be)：按字节写的调用接口，默认映射到 es_spi_master.ES_SPI_WR_BE(addr, data, be)。
 6. 宏 SCU_RO_CHIP_ID1 / SCU_RO_CHIP_ID2：CHIP_ID 只读寄存器的期望值，默认 0。
+7. 宏 SCU_RO_PLL_LOCK / SCU_RO_OSC_CTRL / SCU_RO_PLLSYS_CFG0 / SCU_RO_PLLSYS_CFG1：0x028 / 0x050 / 0x054 / 0x058 的期望值（含 TB 驱动的只读字段），按第一次 rsim 结果设置：0x0000_0007、0x3200_0701、0xA155_5555、0x0043_0053。
 
 
 【二、测试步骤】
@@ -80,8 +81,9 @@ STEP5：系统级读写检查（打开 SCU_RW_SYS 时执行，29 个寄存器）
 
 【五、注意事项】
 1. 假设 ES_SPI_RD(addr, exp) 的第二个参数是期望值，在 task 内部比对。
-2. 只读字段期望值按 TB 输入全 0 计算；TB 有 tie 值时需修改对应期望值（CHIP_ID、PLL_LOCK、WFI、OSC 状态、USB OBS、*_DT 回读等）。
+2. 0x028 / 0x050 / 0x054 / 0x058 的只读字段已按 rsim 实测值设置；其余只读字段期望值按 TB 输入全 0 计算；TB 有 tie 值时需修改对应期望值（CHIP_ID、PLL_LOCK、WFI、OSC 状态、USB OBS、*_DT 回读等）。
 3. 0x00C 默认值为 0x0001_0005（xip_en[16] 复位值为 1），不是 0x0000_0005。
-4. STEP3 总线 timeout 测试期间 timeout_en / error_resp_en 会短暂被置 1，若同时有其它总线访问超时会报错；测试结束已恢复默认值。
-5. 本文件定义了 chip_top_task，tb 中原有同名 task 需删除或改名。
-6. 未覆盖：walking-1 逐位测试。
+4. 0x050 的 OSC 状态位（[29:24]）会随晶振起振变化，读的时刻不同结果可能不同。
+5. STEP3 总线 timeout 测试期间 timeout_en / error_resp_en 会短暂被置 1，若同时有其它总线访问超时会报错；测试结束已恢复默认值。
+6. 本文件定义了 chip_top_task，tb 中原有同名 task 需删除或改名。
+7. 未覆盖：walking-1 逐位测试。

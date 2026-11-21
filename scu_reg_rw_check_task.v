@@ -35,6 +35,20 @@
 `ifndef SCU_RO_CHIP_ID2
 `define SCU_RO_CHIP_ID2 32'h0000_0000   // SYS_CHIP_ID_RPT2
 `endif
+// Expected values of registers containing RO fields driven by the TB / analog models
+// (values below taken from the 1st rsim run, override if the TB configuration changes)
+`ifndef SCU_RO_PLL_LOCK
+`define SCU_RO_PLL_LOCK    32'h0000_0007 // 0x028 : DDR/SYS/MFP PLL all locked
+`endif
+`ifndef SCU_RO_OSC_CTRL
+`define SCU_RO_OSC_CTRL    32'h3200_0701 // 0x050 : RTC_ISON=1, OSC_KICKED=1, OSC_STOPPED=1 + RW default 0x701
+`endif                                   //         NOTE: OSC status bits change after crystal start-up
+`ifndef SCU_RO_PLLSYS_CFG0
+`define SCU_RO_PLLSYS_CFG0 32'hA155_5555 // 0x054 : RW default 0xA000_0000 + PREDIV=1, FRAC=0x55_5555
+`endif
+`ifndef SCU_RO_PLLSYS_CFG1
+`define SCU_RO_PLLSYS_CFG1 32'h0043_0053 // 0x058 : FBDIV=0x053, POSTDIV0_0=3, POSTDIV0_1=4
+`endif
 
 //------------------------------------------------------------------------------
 // Read default value
@@ -147,15 +161,15 @@ begin
   scu_rd_chk(32'h01C, 32'h0001_FFFF);    // SUB_IP_CLK_GATE
   scu_rd_chk(32'h020, 32'h0FFF_FFFF);    // AON_IP_CLK_GATE0
   scu_rd_chk(32'h024, 32'h0000_01FF);    // AON_IP_CLK_GATE1
-  scu_rd_chk(32'h028, 32'h0000_0000);    // PLL_LOCK (RO, TB dependent)
+  scu_rd_chk(32'h028, `SCU_RO_PLL_LOCK);  // PLL_LOCK (RO, TB dependent)
   scu_rd_chk(32'h030, 32'h0000_0033);    // CPU/CHIP/SYS_RESET
   scu_rd_chk(32'h034, 32'h03FD_07FF);    // MAIN_IP_RESET
   scu_rd_chk(32'h038, 32'h0001_0103);    // SUB_IP_RESET
   scu_rd_chk(32'h03C, 32'h0000_00FF);    // AON_IP_RESET
   scu_rd_chk(32'h040, 32'h0000_0000);    // DDR_RESET
-  scu_rd_chk(32'h050, 32'h0000_0701);    // OSC_CTRL ([29:24] RO status)
-  scu_rd_chk(32'h054, 32'hA000_0000);    // PLLSYS_CFG0 ([28:0] RO)
-  scu_rd_chk(32'h058, 32'h0000_0000);    // PLLSYS_CFG1 (mostly RO)
+  scu_rd_chk(32'h050, `SCU_RO_OSC_CTRL);  // OSC_CTRL ([29:24] RO status)
+  scu_rd_chk(32'h054, `SCU_RO_PLLSYS_CFG0); // PLLSYS_CFG0 ([28:0] RO)
+  scu_rd_chk(32'h058, `SCU_RO_PLLSYS_CFG1); // PLLSYS_CFG1 (mostly RO)
   scu_rd_chk(32'h05C, 32'h0169_0000);    // PLLSYS_CFG2
   scu_rd_chk(32'h060, 32'h2100_0000);    // PLL_MFP_CFG0
   scu_rd_chk(32'h064, 32'h0052_307D);    // PLL_MFP_CFG1
@@ -298,7 +312,7 @@ begin
   $display("at %t , SCU STEP2 : RO register write-protect check ---- Begin", $time);
   scu_ro_chk(32'h000, `SCU_RO_CHIP_ID1);
   scu_ro_chk(32'h004, `SCU_RO_CHIP_ID2);
-  scu_ro_chk(32'h028, 32'h0);
+  scu_ro_chk(32'h028, `SCU_RO_PLL_LOCK);
   scu_ro_chk(32'h094, 32'h0);
   scu_ro_chk(32'h0F4, 32'h0);
   scu_ro_chk(32'h0F8, 32'h0);
@@ -459,9 +473,9 @@ begin
   scu_rw_chk(32'h038, 32'h0001_0103, 32'h0001_0103); // SUB_IP_RESET
   scu_rw_chk(32'h03C, 32'h0000_00FF, 32'h0000_00FF); // AON_IP_RESET
   scu_rw_chk(32'h040, 32'h0000_0000, 32'h0000_03FF); // DDR_RESET
-  scu_rw_chk(32'h050, 32'h0000_0701, 32'h0001_0703); // OSC_CTRL
-  scu_rw_chk(32'h054, 32'hA000_0000, 32'hE000_0000); // PLLSYS_CFG0
-  scu_rw_chk(32'h058, 32'h0000_0000, 32'h8000_C000); // PLLSYS_CFG1
+  scu_rw_chk(32'h050, `SCU_RO_OSC_CTRL,    32'h0001_0703); // OSC_CTRL (RO status must be stable during test)
+  scu_rw_chk(32'h054, `SCU_RO_PLLSYS_CFG0, 32'hE000_0000); // PLLSYS_CFG0
+  scu_rw_chk(32'h058, `SCU_RO_PLLSYS_CFG1, 32'h8000_C000); // PLLSYS_CFG1
   scu_rw_chk(32'h05C, 32'h0169_0000, 32'hFFFF_FFFF); // PLLSYS_CFG2
   scu_rw_chk(32'h060, 32'h2100_0000, 32'hFFFF_FFFF); // PLL_MFP_CFG0
   scu_rw_chk(32'h064, 32'h0052_307D, 32'hF777_FFFF); // PLL_MFP_CFG1
