@@ -941,19 +941,19 @@ $display ("Step 7 -- INTERRUPT : trigger modes ... %t", $time);
         gpio_pad_drv = idle ? 128'b0 : GPIO_IN_CHK;         // active event
         gpio_wait_clk(`GPIO_SYNC_CLK);
         for (g = 0; g < 4; g = g + 1)
-            a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], 32'hFFFF_FFFF);
+            a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], GPIO_IN_CHK[32*g +: 32]);
         gpio_chk_intr_line(1'b1, "intr active");
 
         for (g = 0; g < 4; g = g + 1) a45_io_write32b(gpio_base[g], 32'h64, 32'hFFFF_FFFF);   // W1C, level held
         gpio_wait_clk(`GPIO_SYNC_CLK);
         for (g = 0; g < 4; g = g + 1)
-            a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], lvl ? 32'hFFFF_FFFF : 32'h0);
+            a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], lvl ? GPIO_IN_CHK[32*g +: 32] : 32'h0);
 
         gpio_pad_drv = idle ? GPIO_IN_CHK : 128'b0;         // back to idle
         gpio_wait_clk(`GPIO_SYNC_CLK);
         if (dual) begin
             for (g = 0; g < 4; g = g + 1)
-                a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], 32'hFFFF_FFFF);
+                a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], GPIO_IN_CHK[32*g +: 32]);
             gpio_chk_intr_line(1'b1, "dual 2nd edge");
         end
         else if (!lvl) begin
@@ -1023,7 +1023,7 @@ $display ("Step 8 -- INTERRUPT : enable mask ... %t", $time);
     for (g = 0; g < 4; g = g + 1) a45_io_write32b(gpio_base[g], 32'h50, 32'h5555_5555);   // even channels only
     gpio_wait_clk(`GPIO_SYNC_CLK);
     for (g = 0; g < 4; g = g + 1)
-        a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], 32'h5555_5555);
+        a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], 32'h5555_5555 & GPIO_IN_CHK[32*g +: 32]);
     gpio_chk_intr_line(1'b1, "mask even");
     for (g = 0; g < 4; g = g + 1) a45_io_write32b(gpio_base[g], 32'h50, 32'h0);
     gpio_pad_drv = 128'b0;
@@ -1054,8 +1054,8 @@ $display ("Step 8 -- INTERRUPT : enable mask ... %t", $time);
     for (g = 0; g < 4; g = g + 1) a45_io_write32b(gpio_base[g], 32'h28, 32'h0);
     gpio_wait_clk(`GPIO_SYNC_CLK);
     for (g = 0; g < 4; g = g + 1) begin
-        a45_io_read32b(gpio_base[g], 32'h20, GPIO_IN_CHK[32*g +: 32], 32'hFFFF_FFFF);   // sampling resumes
-        a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], 32'hFFFF_FFFF);   // high level -> interrupt
+        a45_io_read32b(gpio_base[g], 32'h20, GPIO_IN_CHK[32*g +: 32], GPIO_IN_CHK[32*g +: 32]);   // sampling resumes
+        a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], GPIO_IN_CHK[32*g +: 32]);   // high level -> interrupt
     end
     for (g = 0; g < 4; g = g + 1) begin
         a45_io_write32b(gpio_base[g], 32'h50, 32'h0);
@@ -1102,8 +1102,8 @@ $display ("Step 9 -- DE-BOUNCE (db_clk = pclk, period = %0d pclk) ... %t", `GPIO
         a45_io_read32b(gpio_base[g], 32'h20, GPIO_IN_CHK[32*g +: 32], 32'h0);
     gpio_wait_clk(3 * `GPIO_DB_PERIOD);
     for (g = 0; g < 4; g = g + 1) begin
-        a45_io_read32b(gpio_base[g], 32'h20, GPIO_IN_CHK[32*g +: 32], 32'hFFFF_FFFF);
-        a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], 32'hFFFF_FFFF);
+        a45_io_read32b(gpio_base[g], 32'h20, GPIO_IN_CHK[32*g +: 32], GPIO_IN_CHK[32*g +: 32]);
+        a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], GPIO_IN_CHK[32*g +: 32]);
     end
     gpio_chk_intr_line(1'b1, "db pass");
     for (g = 0; g < 4; g = g + 1) a45_io_write32b(gpio_base[g], 32'h64, 32'hFFFF_FFFF);
@@ -1114,7 +1114,7 @@ $display ("Step 9 -- DE-BOUNCE (db_clk = pclk, period = %0d pclk) ... %t", `GPIO
     gpio_pad_drv = GPIO_IN_CHK;
     gpio_wait_clk(4 * `GPIO_DB_PERIOD);
     for (g = 0; g < 4; g = g + 1) begin
-        a45_io_read32b(gpio_base[g], 32'h20, GPIO_IN_CHK[32*g +: 32], 32'hFFFF_FFFF);
+        a45_io_read32b(gpio_base[g], 32'h20, GPIO_IN_CHK[32*g +: 32], GPIO_IN_CHK[32*g +: 32]);
         a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], 32'h0);    // no new rising edge
     end
 
@@ -1128,7 +1128,7 @@ $display ("Step 9 -- DE-BOUNCE (db_clk = pclk, period = %0d pclk) ... %t", `GPIO
     gpio_pad_drv = 128'b0;
     gpio_wait_clk(`GPIO_SYNC_CLK);
     for (g = 0; g < 4; g = g + 1)
-        a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], 32'hFFFF_FFFF);   // 2-clk pulse seen
+        a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], GPIO_IN_CHK[32*g +: 32]);   // 2-clk pulse seen
     for (g = 0; g < 4; g = g + 1) a45_io_write32b(gpio_base[g], 32'h64, 32'hFFFF_FFFF);
 
 `ifndef GPIO_NO_DB_PER_CH
@@ -1158,8 +1158,8 @@ $display ("Step 9 -- DE-BOUNCE (db_clk = pclk, period = %0d pclk) ... %t", `GPIO
         gpio_pad_drv = GPIO_IN_CHK;                         // long pulse on every pad
         gpio_wait_clk(4 * `GPIO_DB_CH_PERIOD);
         for (k = 0; k < 4; k = k + 1) begin
-            a45_io_read32b(gpio_base[k], 32'h20, GPIO_IN_CHK[32*k +: 32], 32'hFFFF_FFFF);
-            a45_io_read32b(gpio_base[k], 32'h64, GPIO_IN_CHK[32*k +: 32], 32'hFFFF_FFFF);   // GPIO_n passes too
+            a45_io_read32b(gpio_base[k], 32'h20, GPIO_IN_CHK[32*k +: 32], GPIO_IN_CHK[32*k +: 32]);
+            a45_io_read32b(gpio_base[k], 32'h64, GPIO_IN_CHK[32*k +: 32], GPIO_IN_CHK[32*k +: 32]);   // GPIO_n passes too
         end
         gpio_pad_drv = 128'b0;
         gpio_wait_clk(4 * `GPIO_DB_CH_PERIOD);
@@ -1181,8 +1181,8 @@ $display ("Step 9 -- DE-BOUNCE (db_clk = pclk, period = %0d pclk) ... %t", `GPIO
     gpio_pad_drv = GPIO_IN_CHK;
     `GPIO_EXTCLK_WAIT;
     for (g = 0; g < 4; g = g + 1) begin
-        a45_io_read32b(gpio_base[g], 32'h20, GPIO_IN_CHK[32*g +: 32], 32'hFFFF_FFFF);
-        a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], 32'hFFFF_FFFF);
+        a45_io_read32b(gpio_base[g], 32'h20, GPIO_IN_CHK[32*g +: 32], GPIO_IN_CHK[32*g +: 32]);
+        a45_io_read32b(gpio_base[g], 32'h64, GPIO_IN_CHK[32*g +: 32], GPIO_IN_CHK[32*g +: 32]);
     end
     gpio_pad_drv = 128'b0;
     `GPIO_EXTCLK_WAIT;
