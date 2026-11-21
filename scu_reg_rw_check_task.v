@@ -1,20 +1,20 @@
 //==============================================================================
-// SCU_REG 默认值 / 读写检查 pattern
-//   - 基于 SCU_REG.v (RELEASE DATE 2026/11/20) 的 reset 值与可写位计算
-//   - 用法: 和 chip_top_task 放在同一个 tb 文件 / module 里, 然后调用
+// SCU_REG default value / read-write check pattern
+//   - Reset values and writable bits derived from SCU_REG.v (RELEASE DATE 2026/11/20)
+//   - Usage: put in the same tb file / module as chip_top_task, then call
 //           scu_reg_check_task;
-//   - 约定: es_spi_master.ES_SPI_RD(addr, exp) 的第二个参数为期望值(内部比对)
+//   - Assumption: 2nd arg of es_spi_master.ES_SPI_RD(addr, exp) is the expected value (compared inside)
 //
-// 分组开关 (默认只跑安全组):
-//   `define SCU_RW_PHY  : DDR IO 测试 / DDR PHY JTAG / USB PHY 配置寄存器读写
-//   `define SCU_RW_SYS  : 电源/时钟门控/复位/PLL/分频 寄存器读写 (会影响系统, 慎用)
-//   0x30 (CPU_RESET/CHIP_RESET/SYS_RESET) 任何模式下都只读不写
-//   Delay chain 相关寄存器任何模式下都只读不写 (只在 STEP1 读默认值):
-//     GMAC : 0x1B8 ~ 0x1CC (CTRL/TEN_S_TIME/DLY_DEFAULT/DLY_TARGET), 0x1E0 ~ 0x1E8 (状态)
-//     EMMC : 0x230 ~ 0x244 (CTRL/TEN_S_TIME/DLY_DEFAULT/DLY_TARGET), 0x248 ~ 0x250 (状态)
+// Group switches (only the safe group runs by default):
+//   `define SCU_RW_PHY  : RW test of DDR IO test / DDR PHY JTAG / USB PHY config registers
+//   `define SCU_RW_SYS  : RW test of power/clock gate/reset/PLL/divider registers (affects system, use with care)
+//   0x30 (CPU_RESET/CHIP_RESET/SYS_RESET) is read-only in all modes, never written
+//   Delay chain registers are read-only in all modes, never written (default read in STEP1 only):
+//     GMAC : 0x1B8 ~ 0x1CC (CTRL/TEN_S_TIME/DLY_DEFAULT/DLY_TARGET), 0x1E0 ~ 0x1E8 (status)
+//     EMMC : 0x230 ~ 0x244 (CTRL/TEN_S_TIME/DLY_DEFAULT/DLY_TARGET), 0x248 ~ 0x250 (status)
 //
-// 注意: RO 字段的期望值按 TB 输入全为 0 计算, 若 TB 有 tie 值(如 CHIP_ID、
-//       PLL_LOCK、WFI 等), 请修改下面的 `SCU_RO_xxx 宏或对应期望值。
+// Note: expected values of RO fields assume all TB inputs are 0. If the TB ties them to other
+//       values (e.g. CHIP_ID, PLL_LOCK, WFI), update the `SCU_RO_xxx macros or the expected values below.
 //==============================================================================
 `ifndef SCU_BASE
 `define SCU_BASE        32'ha000_c000
@@ -27,7 +27,7 @@
 `endif
 
 //------------------------------------------------------------------------------
-// 读默认值
+// Read default value
 //------------------------------------------------------------------------------
 task scu_rd_chk;
   input [31:0] ofs;
@@ -38,9 +38,9 @@ end
 endtask
 
 //------------------------------------------------------------------------------
-// 读写检查: 写 FFFF_FFFF / 0000_0000 / 5A5A_5A5A / A5A5_A5A5, 逐次回读
-//   期望值 = (wdata & msk) | (def & ~msk)   (msk = RW 位, 其余位保持默认/RO)
-//   最后写回默认值并回读确认
+// RW check: write FFFF_FFFF / 0000_0000 / 5A5A_5A5A / A5A5_A5A5, read back after each write
+//   expected = (wdata & msk) | (def & ~msk)   (msk = RW bits, other bits keep default/RO value)
+//   finally write the default value back and read to confirm
 //------------------------------------------------------------------------------
 task scu_rw_chk;
   input [31:0] ofs;
@@ -65,7 +65,7 @@ end
 endtask
 
 //------------------------------------------------------------------------------
-// 只读检查: 写全 1 后回读, 值必须不变
+// RO check: write all 1s, read back, value must not change
 //------------------------------------------------------------------------------
 task scu_ro_chk;
   input [31:0] ofs;
@@ -80,28 +80,28 @@ endtask
 task scu_reg_check_task;
 begin
   //============================================================================
-  // STEP1 : 读全部寄存器 reset 默认值
+  // STEP1 : read reset default value of all registers
   //============================================================================
   $display("at %t , SCU STEP1 : read default value ---- Begin", $time);
   scu_rd_chk(32'h000, `SCU_RO_CHIP_ID1); // SYS_CHIP_ID_REG1 (RO)
   scu_rd_chk(32'h004, `SCU_RO_CHIP_ID2); // SYS_CHIP_ID_REG2 (RO)
   scu_rd_chk(32'h008, 32'h0000_0000);    // POWER_CTRL
-  scu_rd_chk(32'h00C, 32'h0001_0005);    // SYSTEM_MODE_SEL (xip_en[16] 默认为1)
+  scu_rd_chk(32'h00C, 32'h0001_0005);    // SYSTEM_MODE_SEL (xip_en[16] defaults to 1)
   scu_rd_chk(32'h010, 32'h0000_0003);    // PLL_GATE
   scu_rd_chk(32'h014, 32'hFFFF_FFFF);    // MAIN_IP_CLK_GATE0
   scu_rd_chk(32'h018, 32'h0000_7FFF);    // MAIN_IP_CLK_GATE1
   scu_rd_chk(32'h01C, 32'h0001_FFFF);    // SUB_IP_CLK_GATE
   scu_rd_chk(32'h020, 32'h0FFF_FFFF);    // AON_IP_CLK_GATE0
   scu_rd_chk(32'h024, 32'h0000_01FF);    // AON_IP_CLK_GATE1
-  scu_rd_chk(32'h028, 32'h0000_0000);    // PLL_LOCK (RO, 依赖 TB)
+  scu_rd_chk(32'h028, 32'h0000_0000);    // PLL_LOCK (RO, TB dependent)
   scu_rd_chk(32'h030, 32'h0000_0033);    // CPU/CHIP/SYS_RESET
   scu_rd_chk(32'h034, 32'h03FD_07FF);    // MAIN_IP_RESET
   scu_rd_chk(32'h038, 32'h0001_0103);    // SUB_IP_RESET
   scu_rd_chk(32'h03C, 32'h0000_00FF);    // AON_IP_RESET
   scu_rd_chk(32'h040, 32'h0000_0000);    // DDR_RESET
-  scu_rd_chk(32'h050, 32'h0000_0701);    // OSC_CTRL ([29:24] RO 状态)
+  scu_rd_chk(32'h050, 32'h0000_0701);    // OSC_CTRL ([29:24] RO status)
   scu_rd_chk(32'h054, 32'hA000_0000);    // PLLSYS_CFG0 ([28:0] RO)
-  scu_rd_chk(32'h058, 32'h0000_0000);    // PLLSYS_CFG1 (大部分 RO)
+  scu_rd_chk(32'h058, 32'h0000_0000);    // PLLSYS_CFG1 (mostly RO)
   scu_rd_chk(32'h05C, 32'h0169_0000);    // PLLSYS_CFG2
   scu_rd_chk(32'h060, 32'h2100_0000);    // PLL_MFP_CFG0
   scu_rd_chk(32'h064, 32'h0052_307D);    // PLL_MFP_CFG1
@@ -116,7 +116,7 @@ begin
   scu_rd_chk(32'h088, 32'h1330_1010);    // IP_CLK_DIV1
   scu_rd_chk(32'h08C, 32'h4001_1111);    // IP_CLK_DIV2
   scu_rd_chk(32'h090, 32'h0000_0002);    // IP_CLK_DIV3
-  scu_rd_chk(32'h094, 32'h0000_0000);    // CPU_WFI (RO, 依赖 TB)
+  scu_rd_chk(32'h094, 32'h0000_0000);    // CPU_WFI (RO, TB dependent)
   scu_rd_chk(32'h098, 32'h0000_0000);    // DDR_PHY_JTAG ([8] RO TDO)
   scu_rd_chk(32'h0A0, 32'h0000_0000);    // DDR_VER_PRJ
   scu_rd_chk(32'h0A4, 32'h0000_0000);    // DDR_VER_DATE
@@ -239,7 +239,7 @@ begin
   scu_rd_chk(32'h2EC, 32'h0000_0000);    // SW_CFG_REG_11
 
   //============================================================================
-  // STEP2 : 只读寄存器写保护检查 (写全 1, 回读不变)
+  // STEP2 : RO register write-protect check (write all 1s, read back unchanged)
   //============================================================================
   $display("at %t , SCU STEP2 : RO register write-protect check ---- Begin", $time);
   scu_ro_chk(32'h000, `SCU_RO_CHIP_ID1);
@@ -270,7 +270,7 @@ begin
   scu_ro_chk(32'h27C, 32'h0);
   scu_ro_chk(32'h280, 32'h0);
 
-  // 未定义地址 (hole) : 写全 1 后读回应为 0
+  // Undefined addresses (holes) : write all 1s, read back must be 0
   scu_ro_chk(32'h02C, 32'h0);
   scu_ro_chk(32'h044, 32'h0);
   scu_ro_chk(32'h04C, 32'h0);
@@ -289,7 +289,7 @@ begin
   scu_ro_chk(32'h2F0, 32'h0);
 
   //============================================================================
-  // STEP3 : 安全组 RW 读写检查 (不影响系统时钟/复位/电源)
+  // STEP3 : safe group RW check (no effect on system clock/reset/power)
   //           scu_rw_chk(offset, default, rw_mask)
   //============================================================================
   $display("at %t , SCU STEP3 : safe RW register check ---- Begin", $time);
@@ -330,7 +330,7 @@ begin
   scu_rw_chk(32'h1EC, 32'h0208_0208, 32'h1FFF_1FFF); // GMAC_DPRAM_CFG
   scu_rw_chk(32'h1F0, 32'h0000_0000, 32'h0FFF_FFFF); // BREATHE_REG
 
-  // 总线 timeout 控制: 打开 timeout_en/error_resp_en 期间如有其它总线访问超时会报错, 结束后已恢复默认
+  // Bus timeout ctrl: while timeout_en/error_resp_en are set, any other bus access timeout reports an error; default restored afterwards
   scu_rw_chk(32'h254, 32'h0000_0000, 32'h007F_FFFF); // AHB_MAIN_BUS_TIMEOUT_CTRL
   scu_rw_chk(32'h260, 32'h0000_0000, 32'h000F_FFFF); // AHB_SUB_BUS_TIMEOUT_CTRL
   scu_rw_chk(32'h26C, 32'h0000_0000, 32'h003F_FFFF); // APB_MAIN_BUS_TIMEOUT_CTRL
@@ -351,7 +351,7 @@ begin
 
 `ifdef SCU_RW_PHY
   //============================================================================
-  // STEP4 : PHY 相关 RW (DDR IO test / DDR PHY JTAG / USB PHY)
+  // STEP4 : PHY related RW (DDR IO test / DDR PHY JTAG / USB PHY)
   //============================================================================
   $display("at %t , SCU STEP4 : PHY RW register check ---- Begin", $time);
   scu_rw_chk(32'h098, 32'h0000_0000, 32'h0001_000F); // DDR_PHY_JTAG
@@ -388,9 +388,9 @@ begin
 
 `ifdef SCU_RW_SYS
   //============================================================================
-  // STEP5 : 系统级 RW (电源/时钟门控/复位/PLL/分频) —— 会真实影响芯片行为
-  //   确认 SPI2APB -> SCU 访问路径不经过被 gate/reset 的时钟域后再打开
-  //   0x30 CPU_RESET/CHIP_RESET/SYS_RESET 不做写测试
+  // STEP5 : system level RW (power/clock gate/reset/PLL/divider) -- really changes chip behavior
+  //   enable only after confirming the SPI2APB -> SCU access path does not go through a gated/reset clock domain
+  //   0x30 CPU_RESET/CHIP_RESET/SYS_RESET is not write-tested
   //============================================================================
   $display("at %t , SCU STEP5 : SYS RW register check ---- Begin", $time);
   scu_rw_chk(32'h008, 32'h0000_0000, 32'h01FF_01FF); // POWER_CTRL
