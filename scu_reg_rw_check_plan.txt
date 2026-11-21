@@ -5,17 +5,19 @@ SCU_REG 寄存器默认值 / 读写检查 —— 测试内容说明
 - 主 task：chip_top_task
 - RTL 依据：SCU_REG.v（RELEASE DATE 2026/11/20）
 - 访问方式：es_spi_master.ES_SPI_WR / ES_SPI_RD（SPI2APB）
-- 基地址：0xA000_C000（宏 SCU_BASE，可在 include 前重定义）
+- 基地址：0xA000_C000
 
 
 【一、编译开关】
 1. 不加任何宏：默认执行 STEP1、STEP2、STEP3。
 2. `define SCU_RW_PHY：打开 STEP4（DDR IO test / DDR PHY JTAG / USB PHY），默认关闭。
 3. `define SCU_RW_SYS：打开 STEP5（电源 / 时钟门控 / 复位 / PLL / 分频），默认关闭。
-4. `define SCU_BYTE_WR：对所有做读写测试的寄存器追加按字节写测试，默认关闭。
-5. 宏 SCU_WR_BE(addr, data, be)：按字节写的调用接口，默认映射到 es_spi_master.ES_SPI_WR_BE(addr, data, be)。
-6. 宏 SCU_RO_CHIP_ID1 / SCU_RO_CHIP_ID2：CHIP_ID 只读寄存器的期望值，默认 0。
-7. 宏 SCU_RO_PLL_LOCK / SCU_RO_OSC_CTRL / SCU_RO_PLLSYS_CFG0 / SCU_RO_PLLSYS_CFG1：0x028 / 0x050 / 0x054 / 0x058 的期望值（含 TB 驱动的只读字段），按第一次 rsim 结果设置：0x0000_0007、0x3200_0701、0xA155_5555、0x0043_0053。
+4. `define SCU_BYTE_WR：打开 STEP6 按字节写测试，默认关闭；调用 es_spi_master.ES_SPI_WR_BE(addr, data, be)。STEP6 中属于 STEP4 / STEP5 的寄存器还需要同时打开对应的宏。
+
+【代码写法】
+- 不使用子 task / 循环 / 宏，每一次读写都是单独一行 ES_SPI_WR / ES_SPI_RD / ES_SPI_WR_BE，期望值直接写在行内，后续可直接逐行修改。
+- 每个寄存器的读写块前有一行注释，标明默认值和可写位 rw_mask。
+- 0x028 / 0x050 / 0x054 / 0x058 的期望值按第一次 rsim 读回值设置：0x0000_0007、0x3200_0701、0xA155_5555、0x0043_0053。
 
 
 【二、测试步骤】
@@ -55,13 +57,13 @@ STEP5：系统级读写检查（打开 SCU_RW_SYS 时执行，29 个寄存器）
 
 【三、单个寄存器的检查方法】
 
-整字读写（scu_rw_chk，用于 STEP3 / STEP4 / STEP5）：
+整字读写（STEP3 / STEP4 / STEP5）：
 1. 依次整字写 0xFFFF_FFFF、0x0000_0000、0x5A5A_5A5A、0xA5A5_A5A5。
 2. 每次写后读回，期望值 = (wdata & rw_mask) | (default & ~rw_mask)。
    即：可写位读回写入值，保留位 / 只读位保持原值。
 3. 写回默认值并读回确认。
 
-按字节写（scu_byte_chk，打开 SCU_BYTE_WR 时，对 STEP3 / STEP4 / STEP5 中执行到的寄存器）：
+按字节写（STEP6，对象与 STEP3 / STEP4 / STEP5 相同）：
 对 be = 0001、0010、0100、1000、0011、1100、0101、1010 依次执行：
 1. 整字写默认值。
 2. 按 be 写入 ~default。
@@ -81,7 +83,7 @@ STEP5：系统级读写检查（打开 SCU_RW_SYS 时执行，29 个寄存器）
 
 【五、注意事项】
 1. 假设 ES_SPI_RD(addr, exp) 的第二个参数是期望值，在 task 内部比对。
-2. 0x028 / 0x050 / 0x054 / 0x058 的只读字段已按 rsim 实测值设置；其余只读字段期望值按 TB 输入全 0 计算；TB 有 tie 值时需修改对应期望值（CHIP_ID、PLL_LOCK、WFI、OSC 状态、USB OBS、*_DT 回读等）。
+2. 0x028 / 0x050 / 0x054 / 0x058 的只读字段已按 rsim 实测值设置；其余只读字段期望值按 TB 输入全 0 计算；TB 有 tie 值时直接修改对应行的期望值（CHIP_ID、PLL_LOCK、WFI、OSC 状态、USB OBS、*_DT 回读等）。
 3. 0x00C 默认值为 0x0001_0005（xip_en[16] 复位值为 1），不是 0x0000_0005。
 4. 0x050 的 OSC 状态位（[29:24]）会随晶振起振变化，读的时刻不同结果可能不同。
 5. STEP3 总线 timeout 测试期间 timeout_en / error_resp_en 会短暂被置 1，若同时有其它总线访问超时会报错；测试结束已恢复默认值。
