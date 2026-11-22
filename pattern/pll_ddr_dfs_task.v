@@ -1,22 +1,22 @@
 //==========================================================================
 // FILE    : pll_ddr_dfs_task.v
-// PURPOSE : PLL_DDR 调频 pattern
-//           默认 DDR-1600 (F400=400MHz / F300=300MHz) 只测量不配置，
-//           其余频点通过 SCU 配置后测量。
-// USAGE   : 在 test_chip_top 内 `include "pll_ddr_dfs_task.v"，调用 chip_top_task;
-//           (时间单位按 1ns 计算频率)
+// PURPOSE : PLL_DDR frequency change pattern
+//           Default DDR-1600 (F400=400MHz / F300=300MHz): measure only, no config.
+//           Other frequency points: configure via SCU, then measure.
+// USAGE   : `include "pll_ddr_dfs_task.v" inside test_chip_top, then call chip_top_task;
+//           (frequency is calculated assuming 1ns time unit)
 //
 // SCU base 32'ha000_c400
-//   0x10 [1] ddr_clk_on (PLL_DDR_CLK_EN) , [0] mfp_clk_on 保持 1
+//   0x10 [1] ddr_clk_on (PLL_DDR_CLK_EN) , [0] mfp_clk_on keep 1
 //   0x28 [2] DDR_PLL_LOCK (RO)
 //   0x6C PLL_DDR_CFG_0 : [31]pd(1=on) [30]testen [29]disable_sscg [28:24]M [23:0]frac
 //   0x70 PLL_DDR_CFG_1 : [30:28]postdiv1_1 [26:24]postdiv1_0 [22:20]postdiv0_1
 //                        [18:16]postdiv0_0 [13]dsmpd [12]dacpd [11:0]fbdiv
-//   0x74 PLL_DDR_CFG_2 : 固定 32'h0169_0000 (divval=1 cpi=3 cpp=2 gvco=1, SSC off)
-//   0x7C [2] PLL_DDR_CONFIG2_EN : 上升沿载入以上全部字段 (含 CLK_EN)
+//   0x74 PLL_DDR_CFG_2 : fixed 32'h0169_0000 (divval=1 cpi=3 cpp=2 gvco=1, SSC off)
+//   0x7C [2] PLL_DDR_CONFIG2_EN : rising edge loads all fields above (incl. CLK_EN)
 //
-// 频点表 (Fref=24MHz)
-//   DDR-1600 : NI=100 M=1 Fvco=2400 clko0 /6   =400   clko1 /8   =300  0x70=0075_3064 (默认)
+// Frequency table (Fref=24MHz)
+//   DDR-1600 : NI=100 M=1 Fvco=2400 clko0 /6   =400   clko1 /8   =300  0x70=0075_3064 (default)
 //   DDR-1500 : NI=125 M=1 Fvco=3000 clko0 /8   =375   clko1 /5x2 =300  0x70=1047_307D
 //   DDR-1440 : NI=75  M=1 Fvco=1800 clko0 /5   =360   clko1 /6   =300  0x70=0054_304B
 //   DDR-1400 : NI=175 M=2 Fvco=2100 clko0 /6   =350   clko1 /7   =300  0x70=0065_30AF
@@ -30,7 +30,7 @@ integer pll_ddr_err_cnt;
 initial pll_ddr_err_cnt = 0;
 
 //------------------------------------------------------------------
-// 频率测量 : 测 F400 / F300 各 n 个周期，与期望值比对 (容差 0.1%)
+// Frequency measure : measure n cycles of F400 / F300, compare with expected (tolerance 0.1%)
 //------------------------------------------------------------------
 task pll_ddr_freq_meas;
     input real f400_exp;     // MHz
@@ -78,7 +78,7 @@ endtask
 task chip_top_task;
 begin
     //==============================================================
-    // DDR-1600 默认值 : 只测量
+    // DDR-1600 default : measure only
     //==============================================================
     $display("[%0t] ===== DDR-1600 (default) =====", $realtime);
     wait (`PLLDDR.PLL_DDR_LOCK == 1'b1);
@@ -89,7 +89,7 @@ begin
     // DDR-1500 : NI=125 M=1 , clko0 /8 =375 , clko1 /5x2 =300
     //==============================================================
     $display("[%0t] ===== DDR-1500 =====", $realtime);
-    // 关输出 + PLL 掉电 + 写新参数
+    // gate off output + PLL power down + write new settings
     a45_io_write32b(32'ha000_c400, 32'h10 , 32'h0000_0001 );   // CLK_EN=0
     a45_io_write32b(32'ha000_c400, 32'h74 , 32'h0169_0000 );
     a45_io_write32b(32'ha000_c400, 32'h70 , 32'h1047_307D );
@@ -98,14 +98,14 @@ begin
     #1000;
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0000 );   // CFG_EN 1->0
     #2000;
-    // PLL 上电，等 LOCK
+    // PLL power on, wait LOCK
     a45_io_write32b(32'ha000_c400, 32'h6C , 32'hA100_0000 );   // pd=1
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0000 );
     wait (`PLLDDR.PLL_DDR_LOCK == 1'b1);
     a45_io_read32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );
-    // 打开输出
+    // gate on output
     a45_io_write32b(32'ha000_c400, 32'h10 , 32'h0000_0003 );   // CLK_EN=1
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
@@ -214,7 +214,7 @@ begin
     pll_ddr_freq_meas(262.5, 300.0);
 
     //==============================================================
-    // 结果
+    // result
     //==============================================================
     if (pll_ddr_err_cnt == 0) $display("===== PLL_DDR DFS TEST PASS =====");
     else                      $display("===== PLL_DDR DFS TEST FAIL : %0d error(s) =====", pll_ddr_err_cnt);
