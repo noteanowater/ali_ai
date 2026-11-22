@@ -63,3 +63,24 @@ task pll_sys_freq_meas;
             $display("[%0t] PLL_SYS_PASS  : BUS = %f MHz , expect %f MHz , err %f %%", $realtime, fbus, fbus_exp, err);
     end
 endtask
+
+//------------------------------------------------------------------
+// pattern : PLL_SYS is set by strap SEL (SCU 0x54/0x58 are read only),
+//           so only wait lock and measure
+//------------------------------------------------------------------
+task chip_top_task;
+begin
+    $display("[%0t] ===== PLL_SYS =====", $realtime);
+    a45_io_wait32b (32'ha000_c400, 32'h28 , 32'h0000_0002 , 32'h0000_0002 );   // wait SCU 0x28[1] SYS_PLL_LOCK = 1
+
+    // pick the line matching strap SEL
+    pll_sys_freq_meas(500.0     , 400.0);    // SEL=2'b00
+//  pll_sys_freq_meas(560.0     , 400.0);    // SEL=2'b01
+//  pll_sys_freq_meas(600.0     , 400.0);    // SEL=2'b10
+//  pll_sys_freq_meas(457.142857, 400.0);    // SEL=2'b11
+
+    if (pll_sys_err_cnt == 0) $display("===== PLL_SYS TEST PASS =====");
+    else                      $display("===== PLL_SYS TEST FAIL : %0d error(s) =====", pll_sys_err_cnt);
+#2000;
+end
+endtask
