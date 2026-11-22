@@ -81,8 +81,7 @@ begin
     // DDR-1600 default : measure only
     //==============================================================
     $display("[%0t] ===== DDR-1600 (default) =====", $realtime);
-    wait (`PLLDDR.PLL_DDR_LOCK == 1'b1);
-    a45_io_read32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );   // LOCK
+    a45_io_wait32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );   // wait SCU 0x28[2] DDR_PLL_LOCK = 1
     pll_ddr_freq_meas(400.0, 300.0);
 
     //==============================================================
@@ -103,8 +102,7 @@ begin
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0000 );
-    wait (`PLLDDR.PLL_DDR_LOCK == 1'b1);
-    a45_io_read32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );
+    a45_io_wait32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );   // wait SCU 0x28[2] DDR_PLL_LOCK = 1
     // gate on output
     a45_io_write32b(32'ha000_c400, 32'h10 , 32'h0000_0003 );   // CLK_EN=1
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
@@ -129,8 +127,7 @@ begin
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0000 );
-    wait (`PLLDDR.PLL_DDR_LOCK == 1'b1);
-    a45_io_read32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );
+    a45_io_wait32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );   // wait SCU 0x28[2] DDR_PLL_LOCK = 1
     a45_io_write32b(32'ha000_c400, 32'h10 , 32'h0000_0003 );
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
@@ -154,8 +151,7 @@ begin
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0000 );
-    wait (`PLLDDR.PLL_DDR_LOCK == 1'b1);
-    a45_io_read32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );
+    a45_io_wait32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );   // wait SCU 0x28[2] DDR_PLL_LOCK = 1
     a45_io_write32b(32'ha000_c400, 32'h10 , 32'h0000_0003 );
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
@@ -179,8 +175,7 @@ begin
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0000 );
-    wait (`PLLDDR.PLL_DDR_LOCK == 1'b1);
-    a45_io_read32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );
+    a45_io_wait32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );   // wait SCU 0x28[2] DDR_PLL_LOCK = 1
     a45_io_write32b(32'ha000_c400, 32'h10 , 32'h0000_0003 );
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
@@ -204,8 +199,7 @@ begin
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0000 );
-    wait (`PLLDDR.PLL_DDR_LOCK == 1'b1);
-    a45_io_read32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );
+    a45_io_wait32b (32'ha000_c400, 32'h28 , 32'h0000_0004 , 32'h0000_0004 );   // wait SCU 0x28[2] DDR_PLL_LOCK = 1
     a45_io_write32b(32'ha000_c400, 32'h10 , 32'h0000_0003 );
     a45_io_write32b(32'ha000_c400, 32'h7C , 32'h0000_0004 );
     #1000;
