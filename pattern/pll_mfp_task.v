@@ -26,8 +26,7 @@
 //             0x60=A100_0000  0x64=0052_307D  0x68=0169_0000
 //==========================================================================
 
-// TODO : replace with the real hierarchy of U_PLL_MFP_SHELL
-`define PLLMFP  test_chip_top.chip_top.PLL_MFP_SHELL_PATH.U_PLL_MFP_SHELL
+`define PLLMFP  test_chip_top.chip_top.core_main.PLL_MFP      // PLL_MFP_SHELL instance
 
 integer pll_mfp_err_cnt;
 initial pll_mfp_err_cnt = 0;
