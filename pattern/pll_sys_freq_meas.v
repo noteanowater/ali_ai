@@ -77,17 +77,21 @@ begin
     // CPU frequency selected by `define CPU_SPEED_SEL0 / CPU_SPEED_SEL1
 `ifdef CPU_SPEED_SEL0
   `ifdef CPU_SPEED_SEL1
-    $display("[%0t] PLL_SYS_INFO : CPU_SPEED_SEL1=1 CPU_SPEED_SEL0=1 , running CPU = 460 MHz , BUS = 400 MHz", $realtime);
-    pll_sys_freq_meas(460.0, 400.0);
+    // SEL=2'b11 : NI=133 frac=555555 Fvco=3200 , /7 , /8
+    $display("[%0t] PLL_SYS_INFO : CPU_SPEED_SEL1=1 CPU_SPEED_SEL0=1 , running CPU = 457.14 MHz , BUS = 400 MHz", $realtime);
+    pll_sys_freq_meas(457.142857, 400.0);
   `else
-    $display("[%0t] PLL_SYS_INFO : CPU_SPEED_SEL1=0 CPU_SPEED_SEL0=1 , running CPU = 550 MHz , BUS = 400 MHz", $realtime);
-    pll_sys_freq_meas(550.0, 400.0);
+    // SEL=2'b01 : NI=116 frac=AAAAAB Fvco=2800 , /5 , /7
+    $display("[%0t] PLL_SYS_INFO : CPU_SPEED_SEL1=0 CPU_SPEED_SEL0=1 , running CPU = 560 MHz , BUS = 400 MHz", $realtime);
+    pll_sys_freq_meas(560.0, 400.0);
   `endif
 `else
   `ifdef CPU_SPEED_SEL1
+    // SEL=2'b10 : NI=100 frac=0 Fvco=2400 , /4 , /6
     $display("[%0t] PLL_SYS_INFO : CPU_SPEED_SEL1=1 CPU_SPEED_SEL0=0 , running CPU = 600 MHz , BUS = 400 MHz", $realtime);
     pll_sys_freq_meas(600.0, 400.0);
   `else
+    // SEL=2'b00 : NI=83 frac=555555 Fvco=2000 , /4 , /5
     $display("[%0t] PLL_SYS_INFO : CPU_SPEED_SEL1=0 CPU_SPEED_SEL0=0 , running CPU = 500 MHz , BUS = 400 MHz", $realtime);
     pll_sys_freq_meas(500.0, 400.0);
   `endif
