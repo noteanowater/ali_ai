@@ -72,12 +72,20 @@ task chip_top_task;
 begin
     $display("[%0t] ===== PLL_SYS =====", $realtime);
     a45_io_wait32b (32'ha000_c400, 32'h28 , 32'h0000_0002 , 32'h0000_0002 );   // wait SCU 0x28[1] SYS_PLL_LOCK = 1
+    $display("[%0t] PLL_SYS_INFO : PLL_SYS locked", $realtime);
 
-    // pick the line matching strap SEL
-    pll_sys_freq_meas(500.0     , 400.0);    // SEL=2'b00
-//  pll_sys_freq_meas(560.0     , 400.0);    // SEL=2'b01
-//  pll_sys_freq_meas(600.0     , 400.0);    // SEL=2'b10
-//  pll_sys_freq_meas(457.142857, 400.0);    // SEL=2'b11
+    // pick the block matching strap SEL
+    $display("[%0t] PLL_SYS_INFO : running SEL=2'b00 , CPU = 500 MHz , BUS = 400 MHz", $realtime);
+    pll_sys_freq_meas(500.0     , 400.0);
+
+//  $display("[%0t] PLL_SYS_INFO : running SEL=2'b01 , CPU = 560 MHz , BUS = 400 MHz", $realtime);
+//  pll_sys_freq_meas(560.0     , 400.0);
+
+//  $display("[%0t] PLL_SYS_INFO : running SEL=2'b10 , CPU = 600 MHz , BUS = 400 MHz", $realtime);
+//  pll_sys_freq_meas(600.0     , 400.0);
+
+//  $display("[%0t] PLL_SYS_INFO : running SEL=2'b11 , CPU = 457.14 MHz , BUS = 400 MHz", $realtime);
+//  pll_sys_freq_meas(457.142857, 400.0);
 
     if (pll_sys_err_cnt == 0) $display("===== PLL_SYS TEST PASS =====");
     else                      $display("===== PLL_SYS TEST FAIL : %0d error(s) =====", pll_sys_err_cnt);
