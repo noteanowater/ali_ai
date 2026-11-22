@@ -18,11 +18,16 @@
 `define PLLSYS_CLKO0  PLL_SYS_CPU_CLK      // clko0 : A45_CPU
 `define PLLSYS_CLKO1  PLL_SYS_BUS_CLK      // clko1 : BUS/IP
 
+// frequency tolerance in % , override by +define+PLL_SYS_FREQ_TOL=0.5
+`ifndef PLL_SYS_FREQ_TOL
+`define PLL_SYS_FREQ_TOL 0.1
+`endif
+
 integer pll_sys_err_cnt;
 initial pll_sys_err_cnt = 0;
 
 //------------------------------------------------------------------
-// Frequency measure : measure n cycles of clko0 / clko1, compare with expected (tolerance 0.1%)
+// Frequency measure : measure n cycles of clko0 / clko1, compare with expected (tolerance `PLL_SYS_FREQ_TOL %)
 //------------------------------------------------------------------
 task pll_sys_freq_meas;
     input real fcpu_exp;     // MHz , clko0
@@ -40,7 +45,7 @@ task pll_sys_freq_meas;
         fcpu = n * 1000.0 / (t1 - t0);
         err  = (fcpu - fcpu_exp) / fcpu_exp * 100.0;
         if (err < 0.0) err = -err;
-        if (err > 0.1) begin
+        if (err > `PLL_SYS_FREQ_TOL) begin
             pll_sys_err_cnt = pll_sys_err_cnt + 1;
             $display("[%0t] PLL_SYS_ERROR : CPU = %f MHz , expect %f MHz , err %f %%", $realtime, fcpu, fcpu_exp, err);
         end
@@ -55,7 +60,7 @@ task pll_sys_freq_meas;
         fbus = n * 1000.0 / (t1 - t0);
         err  = (fbus - fbus_exp) / fbus_exp * 100.0;
         if (err < 0.0) err = -err;
-        if (err > 0.1) begin
+        if (err > `PLL_SYS_FREQ_TOL) begin
             pll_sys_err_cnt = pll_sys_err_cnt + 1;
             $display("[%0t] PLL_SYS_ERROR : BUS = %f MHz , expect %f MHz , err %f %%", $realtime, fbus, fbus_exp, err);
         end
