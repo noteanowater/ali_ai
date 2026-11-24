@@ -20,7 +20,7 @@
 //   PLL_MFP_CFG_0[28:24] : prediv (M)    default 1
 //   PLL_MFP_CFG_0[29]    : disable_sscg  default 1
 //   PLL_MFP_CFG_0[30]    : testen        default 0
-//   PLL_MFP_CFG_0[31]    : pd            default 0 (1 : power down)
+//   PLL_MFP_CFG_0[31]    : pd            default 1 (1 : power down, SW releases)
 //   PLL_MFP_CFG_1[11:0]  : fbdiv (NI)    default 125
 //   PLL_MFP_CFG_1[12]    : dacpd         default 1
 //   PLL_MFP_CFG_1[13]    : dsmpd         default 1
@@ -162,7 +162,7 @@ always @ (posedge PLL_MFP_CLK or negedge PLL_MFP_RSTJ)begin
     PLL_MFP_PREDIV_REG        <= 5'd1    ;    // M=1    , Fpfd = 24MHz
     PLL_MFP_DIS_SSCG_REG      <= 1'b1    ;    // SSC off
     PLL_MFP_TESTEN_REG        <= 1'b0    ;    // monitor off
-    PLL_MFP_PWRON_REG         <= 1'b1    ;    // power on after reset
+    PLL_MFP_PWRON_REG         <= 1'b0    ;    // power down after reset (SCU pd default 1)
     PLL_MFP_FBDIV_REG         <= 12'd125 ;    // NI=125 , Fvco = 3000MHz
     PLL_MFP_DACPD_REG         <= 1'b1    ;    // integer mode
     PLL_MFP_DSMPD_REG         <= 1'b1    ;    // integer mode

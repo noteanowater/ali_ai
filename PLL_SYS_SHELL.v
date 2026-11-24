@@ -19,7 +19,7 @@
 //   SCU interface
 //   input  (SCU register -> PLL, loaded on PLL_SYS_CFG_EN rising edge)
 //     PLLSYS_DISABLE_SSCG  default 1      PLLSYS_TESTEN      default 0
-//     PLLSYS_PD            default 0      (1 : power down)
+//     PLLSYS_PD            default 1      (1 : power down, SW releases)
 //     PLLSYS_TESTSEL       default 0      PLLSYS_SEL_EXTWAVE default 0
 //     PLLSYS_EXT_MAXADDR   default 0      PLLSYS_EXTWAVEVAL  default 0
 //     PLLSYS_GVCO_BIAS     default 1      PLLSYS_CPP_BIAS    default 2
@@ -151,7 +151,7 @@ always @ (posedge PLL_SYS_CLK or negedge PLL_SYS_RSTJ)begin
     PLL_SYS_CLK_DIV2_REG      <= 8'h27 ;
     PLL_SYS_DIS_SSCG_REG      <= 1'b1  ;    // SSC off
     PLL_SYS_TESTEN_REG        <= 1'b0  ;    // monitor off
-    PLL_SYS_PWRON_REG         <= 1'b1  ;    // power on after reset
+    PLL_SYS_PWRON_REG         <= 1'b0  ;    // power down after reset (SCU pd default 1)
     PLL_SYS_TESTSEL_REG       <= 2'h0  ;    // 00 : lock
     PLL_SYS_SEL_EXTWAVE_REG   <= 1'b0  ;    // internal triangle wave
     PLL_SYS_EXT_MAXADDR_REG   <= 8'h0  ;

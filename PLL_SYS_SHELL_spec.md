@@ -79,7 +79,7 @@ Fclko = Fvco / (postdiv0_x + 1) / (postdiv1_x + 1)
 |---|---|---|---|---|---|
 | 0x54 | [29] | CFG_0[29] | disable_sscg | 1 | 1 = 关闭 SSC |
 | 0x54 | [30] | CFG_0[30] | testen | 0 | 1 = 打开内部监测，正常工作时为 0 |
-| 0x54 | [31] | CFG_0[31] | pd | **0** | 1 = PLL 断电 |
+| 0x54 | [31] | CFG_0[31] | pd | **1** | 1 = PLL 断电（复位后断电，软件写 0 启动） |
 | 0x58 | [15:14] | CFG_1[15:14] | testsel | 0 | 00 = lock，01 = refclk，10 = fbclk |
 | 0x58 | [31] | CFG_1[28] | sel_extwave | 0 | 0 = 内部三角波，1 = 外部波形表 |
 | 0x5C | [7:0] | CFG_2[7:0] | ext_maxaddr | 0 | 外部波形表最大地址 |
@@ -93,7 +93,7 @@ Fclko = Fvco / (postdiv0_x + 1) / (postdiv1_x + 1)
 
 注意事项：
 
-1. **SCU 中 pd 的复位值必须为 0。** 每次 CFG_EN 上升沿会装载全部字段。如果 pd 的复位值是 1，软件只改其他字段并触发 CFG_EN，PLL 就会断电。
+1. **pd 复位值为 1**：复位后 PLL_SYS 断电，CPU 需先运行在 24 MHz 参考时钟上，由软件写 pd=0 并触发 CFG_EN 启动 PLL，等 lock 后再切换到 PLL 时钟。SCU 复位值与 shell 内部默认值一致（均为断电）。
 2. SCU 寄存器文档里 0x58 中 postdiv0_1、postdiv1_0、postdiv1_1、sel_extwave 的位号，和 CFG_1 中的位置不同。需要确认 SCU 的寄存器译码和文档一致，重点核对 sel_extwave（0x58[31]，对应 CFG_1[28]）。
 3. SSC 只在小数模式下有效，也就是 CPU_SPEED_SEL = 2'b00 或 2'b01。
 
@@ -110,9 +110,9 @@ Fclko = Fvco / (postdiv0_x + 1) / (postdiv1_x + 1)
 
 | 条件 | PLL pd 行为 |
 |---|---|
-| 复位释放后 | 寄存器默认上电，PLL_PD_GEN 计满 100 个 PLL_SYS_CLK 周期（24 MHz 时约 4.2 µs）后释放 pd |
+| 复位释放后 | 默认断电（pd=1），等待软件启动 |
 | 软件写 pd = 1 | pd 立即拉高，PLL 断电 |
-| 软件写 pd = 0 | 计 100 个周期后释放 pd |
+| 软件写 pd = 0 并触发 CFG_EN | 计 100 个 PLL_SYS_CLK 周期（24 MHz 时约 4.2 µs）后释放 pd |
 | TEST_MODE | 由 PLL_DFT_RSTJ 控制：1 = 上电（同样延时 100 个周期） |
 | MBIST_ES_MODE | 固定上电 |
 
