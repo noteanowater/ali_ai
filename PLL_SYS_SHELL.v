@@ -19,7 +19,7 @@
 //   SCU interface
 //   input  (SCU register -> PLL, loaded on PLL_SYS_CFG_EN rising edge)
 //     PLLSYS_DISABLE_SSCG  default 1      PLLSYS_TESTEN      default 0
-//     PLLSYS_PD            default 1      (1 : power down, SW releases)
+//     PLLSYS_PD            default 1      (1 : PLL on, HW releases pll pd after delay ; 0 : power down)
 //     PLLSYS_TESTSEL       default 0      PLLSYS_SEL_EXTWAVE default 0
 //     PLLSYS_EXT_MAXADDR   default 0      PLLSYS_EXTWAVEVAL  default 0
 //     PLLSYS_GVCO_BIAS     default 1      PLLSYS_CPP_BIAS    default 2
@@ -48,7 +48,7 @@ module PLL_SYS_SHELL (
     output wire [4:0]  PLLSYS_PREDIV         ,
     input  wire        PLLSYS_DISABLE_SSCG   ,
     input  wire        PLLSYS_TESTEN         ,
-    input  wire        PLLSYS_PD             ,   // 1 : power down
+    input  wire        PLLSYS_PD             ,   // 1 : PLL on , 0 : power down
     output wire [11:0] PLLSYS_FBDIV          ,
     output wire        PLLSYS_DACPD          ,
     output wire        PLLSYS_DSMPD          ,
@@ -114,7 +114,7 @@ wire  [7:0]  PLL_SYS_CLK_DIV2_TEMP     = PLL_SYS_CLK_DIV2        ;
 
 wire         PLL_SYS_DIS_SSCG_TEMP     =  PLLSYS_DISABLE_SSCG    ;
 wire         PLL_SYS_TESTEN_TEMP       =  PLLSYS_TESTEN          ;
-wire         PLL_SYS_PWRON_TEMP        = ~PLLSYS_PD              ;   // SCU pd : 1 = power down
+wire         PLL_SYS_PWRON_TEMP        =  PLLSYS_PD              ;   // SCU PD : 1 = PLL on, 0 = power down
 wire  [1:0]  PLL_SYS_TESTSEL_TEMP      =  PLLSYS_TESTSEL         ;
 wire         PLL_SYS_SEL_EXTWAVE_TEMP  =  PLLSYS_SEL_EXTWAVE     ;
 wire  [7:0]  PLL_SYS_EXT_MAXADDR_TEMP  =  PLLSYS_EXT_MAXADDR     ;
@@ -151,7 +151,7 @@ always @ (posedge PLL_SYS_CLK or negedge PLL_SYS_RSTJ)begin
     PLL_SYS_CLK_DIV2_REG      <= 8'h27 ;
     PLL_SYS_DIS_SSCG_REG      <= 1'b1  ;    // SSC off
     PLL_SYS_TESTEN_REG        <= 1'b0  ;    // monitor off
-    PLL_SYS_PWRON_REG         <= 1'b0  ;    // power down after reset (SCU pd default 1)
+    PLL_SYS_PWRON_REG         <= 1'b1  ;    // PLL on after reset (SCU PD default 1)
     PLL_SYS_TESTSEL_REG       <= 2'h0  ;    // 00 : lock
     PLL_SYS_SEL_EXTWAVE_REG   <= 1'b0  ;    // internal triangle wave
     PLL_SYS_EXT_MAXADDR_REG   <= 8'h0  ;

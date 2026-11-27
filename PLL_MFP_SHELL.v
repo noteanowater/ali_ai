@@ -20,7 +20,7 @@
 //   PLL_MFP_CFG_0[28:24] : prediv (M)    default 1
 //   PLL_MFP_CFG_0[29]    : disable_sscg  default 1
 //   PLL_MFP_CFG_0[30]    : testen        default 0
-//   PLL_MFP_CFG_0[31]    : pd            default 1 (1 : power down, SW releases)
+//   PLL_MFP_CFG_0[31]    : pd            default 1 (1 : PLL on, HW releases pll pd after delay ; 0 : power down)
 //   PLL_MFP_CFG_1[11:0]  : fbdiv (NI)    default 125
 //   PLL_MFP_CFG_1[12]    : dacpd         default 1
 //   PLL_MFP_CFG_1[13]    : dsmpd         default 1
@@ -105,7 +105,7 @@ wire  [23:0] PLL_MFP_FRAC_TEMP         =  PLL_MFP_CFG_0 [23: 0]  ;
 wire  [4:0]  PLL_MFP_PREDIV_TEMP       =  PLL_MFP_CFG_0 [28:24]  ;   // M
 wire         PLL_MFP_DIS_SSCG_TEMP     =  PLL_MFP_CFG_0 [29]     ;
 wire         PLL_MFP_TESTEN_TEMP       =  PLL_MFP_CFG_0 [30]     ;
-wire         PLL_MFP_PWRON_TEMP        = ~PLL_MFP_CFG_0 [31]     ;   // SCU pd : 1 = power down
+wire         PLL_MFP_PWRON_TEMP        =  PLL_MFP_CFG_0 [31]     ;   // SCU PD : 1 = PLL on, 0 = power down
 wire  [11:0] PLL_MFP_FBDIV_TEMP        =  PLL_MFP_CFG_1 [11: 0]  ;   // NI
 wire         PLL_MFP_DACPD_TEMP        =  PLL_MFP_CFG_1 [12]     ;
 wire         PLL_MFP_DSMPD_TEMP        =  PLL_MFP_CFG_1 [13]     ;
@@ -162,7 +162,7 @@ always @ (posedge PLL_MFP_CLK or negedge PLL_MFP_RSTJ)begin
     PLL_MFP_PREDIV_REG        <= 5'd1    ;    // M=1    , Fpfd = 24MHz
     PLL_MFP_DIS_SSCG_REG      <= 1'b1    ;    // SSC off
     PLL_MFP_TESTEN_REG        <= 1'b0    ;    // monitor off
-    PLL_MFP_PWRON_REG         <= 1'b0    ;    // power down after reset (SCU pd default 1)
+    PLL_MFP_PWRON_REG         <= 1'b1    ;    // PLL on after reset (SCU PD default 1)
     PLL_MFP_FBDIV_REG         <= 12'd125 ;    // NI=125 , Fvco = 3000MHz
     PLL_MFP_DACPD_REG         <= 1'b1    ;    // integer mode
     PLL_MFP_DSMPD_REG         <= 1'b1    ;    // integer mode

@@ -5,7 +5,7 @@
 //   (static task : force RHS may not use automatic variables)
 //   Each SCU field is forced with all-0, all-1 and walking-1 patterns,
 //   the decoded field inside the PLL shell must follow (pd is inverted
-//   for *_PWRON_TEMP). Original register values are restored afterwards.
+//   for none : SCU PD 1 = PLL on). Original register values are restored afterwards.
 //
 // Usage  : `include "pll_cfg_conn_check.sv" inside a TB module, then
 //            initial begin
@@ -30,7 +30,7 @@
   `define PLL_CONN_DDR_F(n)   `PLL_CONN_DDR.PLL_DDR_``n``_TEMP
   `define PLL_CONN_MFP_PD     `PLL_CONN_MFP.PLL_MFP_PWRON_TEMP
   `define PLL_CONN_DDR_PD     `PLL_CONN_DDR.PLL_DDR_PWRON_TEMP
-  `define PLL_CONN_MD_PD_INV  1
+  `define PLL_CONN_MD_PD_INV  0
 `else
   `define PLL_CONN_MFP_F(n)   `PLL_CONN_MFP.PLL_MFP_``n``_DFT
   `define PLL_CONN_DDR_F(n)   `PLL_CONN_DDR.PLL_DDR_``n``_DFT
@@ -80,7 +80,7 @@ task pll_cfg_conn_check(output int err_cnt);
   //------------------------------------------------------------------------
   `PLL_CONN_CHK(SYS_DIS_SSCG    , `PLL_CONN_SCU.pllsys_disable_sscg_reg, `PLL_CONN_SYS.PLL_SYS_DIS_SSCG_TEMP     ,  1, 0)
   `PLL_CONN_CHK(SYS_TESTEN      , `PLL_CONN_SCU.pllsys_testen_reg      , `PLL_CONN_SYS.PLL_SYS_TESTEN_TEMP       ,  1, 0)
-  `PLL_CONN_CHK(SYS_PD          , `PLL_CONN_SCU.pllsys_pd_reg          , `PLL_CONN_SYS.PLL_SYS_PWRON_TEMP        ,  1, 1)
+  `PLL_CONN_CHK(SYS_PD          , `PLL_CONN_SCU.pllsys_pd_reg          , `PLL_CONN_SYS.PLL_SYS_PWRON_TEMP        ,  1, 0)
   `PLL_CONN_CHK(SYS_TESTSEL     , `PLL_CONN_SCU.pllsys_testsel_reg     , `PLL_CONN_SYS.PLL_SYS_TESTSEL_TEMP      ,  2, 0)
   `PLL_CONN_CHK(SYS_SEL_EXTWAVE , `PLL_CONN_SCU.pllsys_sel_extwave_reg , `PLL_CONN_SYS.PLL_SYS_SEL_EXTWAVE_TEMP  ,  1, 0)
   `PLL_CONN_CHK(SYS_EXT_MAXADDR , `PLL_CONN_SCU.pllsys_ext_maxaddr_reg , `PLL_CONN_SYS.PLL_SYS_EXT_MAXADDR_TEMP  ,  8, 0)
