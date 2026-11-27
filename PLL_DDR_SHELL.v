@@ -20,7 +20,7 @@
 //   PLL_DDR_CFG_0[28:24] : prediv (M)    default 1
 //   PLL_DDR_CFG_0[29]    : disable_sscg  default 1
 //   PLL_DDR_CFG_0[30]    : testen        default 0
-//   PLL_DDR_CFG_0[31]    : pd            default 1 (1 : PLL on, HW releases pll pd after delay ; 0 : power down)
+//   PLL_DDR_CFG_0[31]    : en            default 1 (PLL enable : 1 = on, HW releases pll pd after delay ; 0 = off)
 //   PLL_DDR_CFG_1[11:0]  : fbdiv (NI)    default 100
 //   PLL_DDR_CFG_1[12]    : dacpd         default 1
 //   PLL_DDR_CFG_1[13]    : dsmpd         default 1
@@ -105,7 +105,7 @@ wire  [23:0] PLL_DDR_FRAC_TEMP         =  PLL_DDR_CFG_0 [23: 0]  ;
 wire  [4:0]  PLL_DDR_PREDIV_TEMP       =  PLL_DDR_CFG_0 [28:24]  ;   // M
 wire         PLL_DDR_DIS_SSCG_TEMP     =  PLL_DDR_CFG_0 [29]     ;
 wire         PLL_DDR_TESTEN_TEMP       =  PLL_DDR_CFG_0 [30]     ;
-wire         PLL_DDR_PWRON_TEMP        =  PLL_DDR_CFG_0 [31]     ;   // SCU PD : 1 = PLL on, 0 = power down
+wire         PLL_DDR_PWRON_TEMP        =  PLL_DDR_CFG_0 [31]     ;   // PLL enable : 1 = on, 0 = off
 wire  [11:0] PLL_DDR_FBDIV_TEMP        =  PLL_DDR_CFG_1 [11: 0]  ;   // NI
 wire         PLL_DDR_DACPD_TEMP        =  PLL_DDR_CFG_1 [12]     ;
 wire         PLL_DDR_DSMPD_TEMP        =  PLL_DDR_CFG_1 [13]     ;
@@ -162,7 +162,7 @@ always @ (posedge PLL_DDR_CLK or negedge PLL_DDR_RSTJ)begin
     PLL_DDR_PREDIV_REG        <= 5'd1    ;    // M=1    , Fpfd = 24MHz
     PLL_DDR_DIS_SSCG_REG      <= 1'b1    ;    // SSC off
     PLL_DDR_TESTEN_REG        <= 1'b0    ;    // monitor off
-    PLL_DDR_PWRON_REG         <= 1'b1    ;    // PLL on after reset (SCU PD default 1)
+    PLL_DDR_PWRON_REG         <= 1'b1    ;    // PLL on after reset (SCU EN default 1)
     PLL_DDR_FBDIV_REG         <= 12'd100 ;    // NI=100 , Fvco = 2400MHz
     PLL_DDR_DACPD_REG         <= 1'b1    ;    // integer mode
     PLL_DDR_DSMPD_REG         <= 1'b1    ;    // integer mode
