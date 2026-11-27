@@ -58,7 +58,7 @@ Fclko = Fvco / (postdiv0_x + 1) / (postdiv1_x + 1)
 | PLL_SYS_TEST_DIV1_CLK / DIV2_CLK | O | 1 | clko0 / clko1 的分频观测时钟 |
 | PLL_SYS_SCAN_DIV1_CLK / DIV2_CLK | O | 1 | 扫描时钟（÷1 / ÷2） |
 | PLL_SYS_CLK_DIV1 / DIV2 | I | 8 | 观测时钟分频值 |
-| PLLSYS_DISABLE_SSCG / TESTEN / EN / TESTSEL / SEL_EXTWAVE | I | 1/1/1/2/1 | SCU 寄存器字段，CFG_EN 时装载（EN：1 = PLL 开启，0 = 断电） |
+| PLLSYS_DISABLE_SSCG / TESTEN / PWRON / TESTSEL / SEL_EXTWAVE | I | 1/1/1/2/1 | SCU 寄存器字段，CFG_EN 时装载（PWRON：1 = PLL 开启，0 = 断电） |
 | PLLSYS_EXT_MAXADDR / EXTWAVEVAL / GVCO_BIAS / CPP_BIAS / CPI_BIAS / DIVVAL / SPREAD / DOWNSPREAD | I | 8/8/2/3/3/4/3/1 | SCU 寄存器字段，CFG_EN 时装载 |
 | PLLSYS_FRAC / PREDIV / FBDIV / DACPD / DSMPD | O | 24/5/12/1/1 | strap 译码后实际送给 PLL 的分频配置，供 SCU 回读 |
 | PLLSYS_POSTDIV0_0 / 0_1 / 1_0 / 1_1 | O | 3 | 同上 |
@@ -79,7 +79,7 @@ Fclko = Fvco / (postdiv0_x + 1) / (postdiv1_x + 1)
 |---|---|---|---|---|---|
 | 0x54 | [29] | CFG_0[29] | disable_sscg | 1 | 1 = 关闭 SSC |
 | 0x54 | [30] | CFG_0[30] | testen | 0 | 1 = 打开内部监测，正常工作时为 0 |
-| 0x54 | [31] | CFG_0[31] | EN | **1** | 1 = PLL 开启（硬件计数约 4.2 µs 后释放 PLL 的 pd 引脚），0 = 关闭 PLL |
+| 0x54 | [31] | CFG_0[31] | PWRON | **1** | 1 = PLL 开启（硬件计数约 4.2 µs 后释放 PLL 的 pd 引脚），0 = 关闭 PLL |
 | 0x58 | [15:14] | CFG_1[15:14] | testsel | 0 | 00 = lock，01 = refclk，10 = fbclk |
 | 0x58 | [31] | CFG_1[28] | sel_extwave | 0 | 0 = 内部三角波，1 = 外部波形表 |
 | 0x5C | [7:0] | CFG_2[7:0] | ext_maxaddr | 0 | 外部波形表最大地址 |
@@ -93,7 +93,7 @@ Fclko = Fvco / (postdiv0_x + 1) / (postdiv1_x + 1)
 
 注意事项：
 
-1. **EN 寄存器 1 = PLL 开启，0 = 关闭**（与 PLL IP 的 pd 引脚极性相反）。复位值为 1：复位后 PLL_PD_GEN 计满 100 个周期（约 4.2 µs）把 PLL 的 pd 引脚拉低，PLL 自动启动。SCU 复位值与 shell 内部默认值一致（均为开启）。
+1. **PWRON 寄存器 1 = PLL 开启，0 = 关闭**（与 PLL IP 的 pd 引脚极性相反）。复位值为 1：复位后 PLL_PD_GEN 计满 100 个周期（约 4.2 µs）把 PLL 的 pd 引脚拉低，PLL 自动启动。SCU 复位值与 shell 内部默认值一致（均为开启）。
 2. SCU 寄存器文档里 0x58 中 postdiv0_1、postdiv1_0、postdiv1_1、sel_extwave 的位号，和 CFG_1 中的位置不同。需要确认 SCU 的寄存器译码和文档一致，重点核对 sel_extwave（0x58[31]，对应 CFG_1[28]）。
 3. SSC 只在小数模式下有效，也就是 CPU_SPEED_SEL = 2'b00 或 2'b01。
 
@@ -104,14 +104,14 @@ Fclko = Fvco / (postdiv0_x + 1) / (postdiv1_x + 1)
 3. 模块内部两级同步后检测上升沿，产生一个周期的 CFG_PULSE，所有字段同时装载。
 4. 下次更新前，先把 PLL_SYS_CFG_EN 拉回 0。
 
-修改 cpi_bias、cpp_bias、gvco_bias 等环路参数时，建议先写 EN=0（关闭），至少 1 µs 后再写 EN=1（开启）。
+修改 cpi_bias、cpp_bias、gvco_bias 等环路参数时，建议先写 PWRON=0（关闭），至少 1 µs 后再写 PWRON=1（开启）。
 
 ## 7. 上电与断电
 
-SCU 的 EN 寄存器**不直接接到 PLL**，而是经过延时模块：
+SCU 的 PWRON 寄存器**不直接接到 PLL**，而是经过延时模块：
 
 ```
-SCU EN 寄存器 ──(CFG_EN 装载)──> PLL_SYS_PWRON_REG ──> PLL_PD_GEN（计数 100 个 PLL_SYS_CLK）──> PLL IP pd 引脚
+SCU PWRON 寄存器 ──(CFG_EN 装载)──> PLL_SYS_PWRON_REG ──> PLL_PD_GEN（计数 100 个 PLL_SYS_CLK）──> PLL IP pd 引脚
      1 = 开启                                                                                     0 = 工作
      0 = 关闭                                                                                     1 = 断电
 ```
@@ -119,9 +119,9 @@ SCU EN 寄存器 ──(CFG_EN 装载)──> PLL_SYS_PWRON_REG ──> PLL_PD_G
 
 | 条件 | PLL pd 引脚行为 |
 |---|---|
-| 复位释放后 | EN 寄存器默认 1，计 100 个 PLL_SYS_CLK 周期（24 MHz 时约 4.2 µs）后 pd 引脚拉低，PLL 启动 |
-| 软件写 EN = 0 并触发 CFG_EN | pd 引脚立即拉高，PLL 关闭 |
-| 软件写 EN = 1 并触发 CFG_EN | 计 100 个周期后 pd 引脚拉低，PLL 重新启动 |
+| 复位释放后 | PWRON 寄存器默认 1，计 100 个 PLL_SYS_CLK 周期（24 MHz 时约 4.2 µs）后 pd 引脚拉低，PLL 启动 |
+| 软件写 PWRON = 0 并触发 CFG_EN | pd 引脚立即拉高，PLL 关闭 |
+| 软件写 PWRON = 1 并触发 CFG_EN | 计 100 个周期后 pd 引脚拉低，PLL 重新启动 |
 | TEST_MODE | 由 PLL_DFT_RSTJ 控制：1 = 上电（同样延时 100 个周期） |
 | MBIST_ES_MODE | 固定上电 |
 

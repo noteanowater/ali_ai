@@ -4,7 +4,7 @@
 //   Reconfigure PLL_DDR through SCU (SPI) to run a different frequency.
 //
 //   SCU registers (base 32'ha000_c000)
-//     0x6C : PLL_DDR_CFG_0  [31] EN (1 = PLL on, 0 = off) [29] DISABLE_SSCG
+//     0x6C : PLL_DDR_CFG_0  [31] PWRON (1 = PLL on, 0 = off) [29] DISABLE_SSCG
 //                           [28:24] PREDIV(M)  [23:0] FRAC
 //     0x70 : PLL_DDR_CFG_1  [11:0] FBDIV(NI) [12] DACPD [13] DSMPD [15:14] TESTSEL
 //                           [18:16] POSTDIV0_0 [22:20] POSTDIV0_1
@@ -13,9 +13,9 @@
 //     0x7C : PLL CFG_EN     rising edge loads the config into the PLL shell
 //
 //   Sequence (datasheet : dividers must be set while pd=1, release >= 1us later)
-//     1. EN = 0 (PLL off) + new divider setting, pulse CFG_EN
+//     1. PWRON = 0 (PLL off) + new divider setting, pulse CFG_EN
 //     2. wait >= 1us
-//     3. EN = 1 (PLL on), pulse CFG_EN
+//     3. PWRON = 1 (PLL on), pulse CFG_EN
 //        -> PLL_PD_GEN releases the PLL pd pin after 100 cycles (~4.2us @24MHz)
 //     4. wait PLL_DDR_LOCK = 1
 //
@@ -49,8 +49,8 @@ end
 endtask
 
 task pll_ddr_set_freq(input integer ddr_rate);
-    reg [31:0] cfg0_off ;   // 0x6C with EN = 0 (PLL off)
-    reg [31:0] cfg0_on  ;   // 0x6C with EN = 1 (PLL on)
+    reg [31:0] cfg0_off ;   // 0x6C with PWRON = 0 (PLL off)
+    reg [31:0] cfg0_on  ;   // 0x6C with PWRON = 1 (PLL on)
     reg [31:0] cfg1     ;   // 0x70
     integer    t        ;
 begin
