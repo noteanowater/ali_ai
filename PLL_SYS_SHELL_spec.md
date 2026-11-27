@@ -108,6 +108,15 @@ Fclko = Fvco / (postdiv0_x + 1) / (postdiv1_x + 1)
 
 ## 7. 上电与断电
 
+SCU 的 PD 寄存器**不直接接到 PLL**，而是经过延时模块：
+
+```
+SCU PD 寄存器 ──(CFG_EN 装载)──> PLL_SYS_PWRON_REG ──> PLL_PD_GEN（计数 100 个 PLL_SYS_CLK）──> PLL IP pd 引脚
+     1 = 开启                                                                                     0 = 工作
+     0 = 关闭                                                                                     1 = 断电
+```
+
+
 | 条件 | PLL pd 引脚行为 |
 |---|---|
 | 复位释放后 | PD 寄存器默认 1，计 100 个 PLL_SYS_CLK 周期（24 MHz 时约 4.2 µs）后 pd 引脚拉低，PLL 启动 |
