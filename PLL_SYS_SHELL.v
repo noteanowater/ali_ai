@@ -19,7 +19,7 @@
 //   SCU interface
 //   input  (SCU register -> PLL, loaded on PLL_SYS_CFG_EN rising edge)
 //     PLLSYS_DISABLE_SSCG  default 1      PLLSYS_TESTEN      default 0
-//     PLLSYS_PWRON            default 1      (PLL power on : 1 = on, HW releases pll pd after delay ; 0 = off)
+//     PLLSYS_PWRON         default 1      (PLL power on : 1 = on, HW releases pll pd after delay ; 0 = off)
 //     PLLSYS_TESTSEL       default 0      PLLSYS_SEL_EXTWAVE default 0
 //     PLLSYS_EXT_MAXADDR   default 0      PLLSYS_EXTWAVEVAL  default 0
 //     PLLSYS_GVCO_BIAS     default 1      PLLSYS_CPP_BIAS    default 2
@@ -48,7 +48,7 @@ module PLL_SYS_SHELL (
     output wire [4:0]  PLLSYS_PREDIV         ,
     input  wire        PLLSYS_DISABLE_SSCG   ,
     input  wire        PLLSYS_TESTEN         ,
-    input  wire        PLLSYS_PWRON             ,   // PLL power on : 1 = on , 0 = off
+    input  wire        PLLSYS_PWRON          ,   // PLL power on : 1 = on , 0 = off
     output wire [11:0] PLLSYS_FBDIV          ,
     output wire        PLLSYS_DACPD          ,
     output wire        PLLSYS_DSMPD          ,
@@ -114,7 +114,7 @@ wire  [7:0]  PLL_SYS_CLK_DIV2_TEMP     = PLL_SYS_CLK_DIV2        ;
 
 wire         PLL_SYS_DIS_SSCG_TEMP     =  PLLSYS_DISABLE_SSCG    ;
 wire         PLL_SYS_TESTEN_TEMP       =  PLLSYS_TESTEN          ;
-wire         PLL_SYS_PWRON_TEMP        =  PLLSYS_PWRON              ;   // PLL power on : 1 = on, 0 = off
+wire         PLL_SYS_PWRON_TEMP        =  PLLSYS_PWRON           ;   // PLL power on : 1 = on, 0 = off
 wire  [1:0]  PLL_SYS_TESTSEL_TEMP      =  PLLSYS_TESTSEL         ;
 wire         PLL_SYS_SEL_EXTWAVE_TEMP  =  PLLSYS_SEL_EXTWAVE     ;
 wire  [7:0]  PLL_SYS_EXT_MAXADDR_TEMP  =  PLLSYS_EXT_MAXADDR     ;
