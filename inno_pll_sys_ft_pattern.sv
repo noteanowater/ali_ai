@@ -111,34 +111,87 @@ always @(*) PLL_MFP_TESTOUT     = test_chip_top.XTRPWM0 ;
 always @(*) ES_MODE_RPT         = test_chip_top.XPWM12 ;
 
 //==================================================
-// Helpers
+// Main
 //==================================================
-// SPI write + CFG_EN load pulse
-task automatic pll_cfg_load();
-    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN , 32'h0000_0007);   // CFG_EN : load
-    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN , 32'h0000_0000);   // CFG_EN : disable
-endtask
+task chip_top_task ;
+begin
+    clk_err_cnt = 0;
 
-// ES_MODE4 strap + SEL[1:0] strap + PAD_RSTJ 0 -> 1
-task automatic pll_sys_strap_reset(input logic [1:0] sel);
+    //==================================================
+    // SYS_PLL_TEST_1
+    //==================================================
+    $display("[%0t] ==================== SYS_PLL_TEST_1 start ====================", $realtime);
+
+    // ES_MODE4 strap
     force `PAD_GPIO_5      = 1'b0;   // TEST_MODE
     force `PAD_UART0_TXD   = 1'b0;   // FUNC_MODE
     force `PAD_IIC0_SCL    = 1'b1;   // WORK_MODE[2]
     force `PAD_IIC1_SDA    = 1'b0;   // WORK_MODE[1]
     force `PAD_IIC1_SCL    = 1'b0;   // WORK_MODE[0]
-    force `PAD_WKUP_GPIO_4 = sel[1]; // SEL[1]
-    force `PAD_WKUP_GPIO_3 = sel[0]; // SEL[0]
-
-    force `PAD_SYSRESETN   = 1'b0;   // PAD_RSTJ = 0
+    // SEL[1:0] = 00
+    force `PAD_WKUP_GPIO_4 = 1'b0;   // SEL[1]
+    force `PAD_WKUP_GPIO_3 = 1'b0;   // SEL[0]
+    // PAD_RSTJ 0 -> 1
+    force `PAD_SYSRESETN   = 1'b0;
     #1us;
-    force `PAD_SYSRESETN   = 1'b1;   // PAD_RSTJ = 1 (strap latched)
-    #10us;                           // wait reset release / ES SPI ready
+    force `PAD_SYSRESETN   = 1'b1;
+    #10us;
 
-    $display("[%0t] INFO : strap SEL=%b, PAD_RSTJ 0->1 done, ES_MODE_RPT=%b",
-             $realtime, sel, ES_MODE_RPT);
-endtask
+    // TESTEN=1 , TESTSEL=00 (pll lock)
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_0 , 32'he155_5555);
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_1 , 32'h0043_3053);
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0007);   // CFG_EN : load
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0000);
+    #100us;                                                                   // wait INNO_PLL stable
+    if (PLL_SYS_TESTOUT === 1'b1)
+        $display("[%0t] LOCK_PASS  : SYS_PLL_TEST_1 XTG6(lock) = 1", $realtime);
+    else begin
+        clk_err_cnt = clk_err_cnt + 1;
+        $display("[%0t] LOCK_ERROR : SYS_PLL_TEST_1 XTG6(lock) = %b , expect 1", $realtime, PLL_SYS_TESTOUT);
+    end
 
-task automatic pll_sys_strap_release();
+    // TESTSEL=10 (pfd clk) , XTG6 = 24MHz (23~25MHz)
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_1 , 32'h0043_b053);
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0007);   // CFG_EN : load
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0000);
+    clk_freq_meas(PLL_SYS_TESTOUT , 24.0 , "SYS_PLL_TEST_1_PFD" , 1000 , 100.0/24.0);
+
+    //==================================================
+    // SYS_PLL_TEST_2
+    //==================================================
+    $display("[%0t] ==================== SYS_PLL_TEST_2 start ====================", $realtime);
+
+    // SEL[1:0] = 11
+    force `PAD_WKUP_GPIO_4 = 1'b1;   // SEL[1]
+    force `PAD_WKUP_GPIO_3 = 1'b1;   // SEL[0]
+    // PAD_RSTJ 0 -> 1
+    force `PAD_SYSRESETN   = 1'b0;
+    #1us;
+    force `PAD_SYSRESETN   = 1'b1;
+    #10us;
+
+    // TESTEN=1 , TESTSEL=00 (pll lock)
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_0 , 32'he120_0000);
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_1 , 32'h0076_3085);
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0007);   // CFG_EN : load
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0000);
+    #100us;                                                                   // wait INNO_PLL stable
+    if (PLL_SYS_TESTOUT === 1'b1)
+        $display("[%0t] LOCK_PASS  : SYS_PLL_TEST_2 XTG6(lock) = 1", $realtime);
+    else begin
+        clk_err_cnt = clk_err_cnt + 1;
+        $display("[%0t] LOCK_ERROR : SYS_PLL_TEST_2 XTG6(lock) = %b , expect 1", $realtime, PLL_SYS_TESTOUT);
+    end
+
+    // TESTSEL=10 (pfd clk) , XTG6 = 24MHz (23~25MHz)
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_1 , 32'h0076_b085);
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0007);   // CFG_EN : load
+    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0000);
+    clk_freq_meas(PLL_SYS_TESTOUT , 24.0 , "SYS_PLL_TEST_2_PFD" , 1000 , 100.0/24.0);
+
+    //==================================================
+    // release strap pins & summary
+    //==================================================
     release `PAD_GPIO_5;
     release `PAD_UART0_TXD;
     release `PAD_IIC0_SCL;
@@ -147,92 +200,6 @@ task automatic pll_sys_strap_release();
     release `PAD_WKUP_GPIO_4;
     release `PAD_WKUP_GPIO_3;
     release `PAD_SYSRESETN;
-endtask
-
-// TESTSEL=00 : XTG6 must be 1 (lock) and stay 1
-task automatic pll_sys_lock_chk(input string name);
-    if (PLL_SYS_TESTOUT !== 1'b1) begin
-        clk_err_cnt = clk_err_cnt + 1;
-        $display("[%0t] LOCK_ERROR : %s XTG6(lock) = %b , expect 1", $realtime, name, PLL_SYS_TESTOUT);
-        return;
-    end
-    // lock must not drop in the next 10us
-    fork begin
-        fork
-            begin
-                @(PLL_SYS_TESTOUT);
-                clk_err_cnt = clk_err_cnt + 1;
-                $display("[%0t] LOCK_ERROR : %s XTG6(lock) dropped to %b", $realtime, name, PLL_SYS_TESTOUT);
-            end
-            begin
-                #10us;
-                $display("[%0t] LOCK_PASS  : %s XTG6(lock) = 1", $realtime, name);
-            end
-        join_any
-        disable fork;
-    end join
-endtask
-
-// TESTSEL=10 : XTG6 = PFD clk 24MHz, spec 23~25MHz, with timeout
-task automatic pll_sys_pfd_chk(input string name);
-    fork begin
-        fork
-            clk_freq_meas(PLL_SYS_TESTOUT, 24.0, name, 1000, 100.0/24.0);   // +/-1MHz
-            begin
-                #1ms;
-                clk_err_cnt = clk_err_cnt + 1;
-                $display("[%0t] CLK_ERROR : %s no clock on XTG6 (timeout)", $realtime, name);
-            end
-        join_any
-        disable fork;
-    end join
-endtask
-
-// One test case of the plan
-task automatic pll_sys_ft_case(
-    input string       name,
-    input logic [1:0]  sel,
-    input logic [31:0] cfg0,
-    input logic [31:0] cfg1_lock,   // TESTSEL=00
-    input logic [31:0] cfg1_pfd     // TESTSEL=10
-);
-    integer err_start = clk_err_cnt;
-    $display("[%0t] ==================== %s start ====================", $realtime, name);
-
-    // 1. strap pin + PAD_RSTJ
-    pll_sys_strap_reset(sel);
-
-    // 2. TESTEN=1, TESTSEL=00 -> lock
-    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_0 , cfg0);
-    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_1 , cfg1_lock);
-    pll_cfg_load();
-    #100us;                                   // wait INNO_PLL stable
-    pll_sys_lock_chk({name, "_LOCK"});
-
-    // 3. TESTSEL=10 -> PFD clk
-    test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_1 , cfg1_pfd);
-    pll_cfg_load();
-    pll_sys_pfd_chk({name, "_PFD"});
-
-    if (clk_err_cnt == err_start)
-        $display("[%0t] ==================== %s PASS ====================", $realtime, name);
-    else
-        $display("[%0t] ==================== %s FAIL (%0d errors) ====================",
-                 $realtime, name, clk_err_cnt - err_start);
-endtask
-
-//==================================================
-// Main
-//==================================================
-task chip_top_task ;
-begin
-    clk_err_cnt = 0;
-
-    //               name               SEL    CFG_0          CFG_1(lock)    CFG_1(pfd)
-    pll_sys_ft_case("SYS_PLL_TEST_1", 2'b00, 32'he155_5555, 32'h0043_3053, 32'h0043_b053);
-    pll_sys_ft_case("SYS_PLL_TEST_2", 2'b11, 32'he120_0000, 32'h0076_3085, 32'h0076_b085);
-
-    pll_sys_strap_release();
 
     $display("==================================================");
     if (clk_err_cnt == 0)
