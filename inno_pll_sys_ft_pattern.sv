@@ -143,18 +143,18 @@ begin
     test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0007);   // CFG_EN : load
     test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0000);
     #100us;                                                                   // wait INNO_PLL stable
-    if (PLL_SYS_TESTOUT === 1'b1)
+    if (test_chip_top.PLL_SYS_TESTOUT === 1'b1)
         $display("[%0t] LOCK_PASS  : SYS_PLL_TEST_1 XTG6(lock) = 1", $realtime);
     else begin
         clk_err_cnt = clk_err_cnt + 1;
-        $display("[%0t] LOCK_ERROR : SYS_PLL_TEST_1 XTG6(lock) = %b , expect 1", $realtime, PLL_SYS_TESTOUT);
+        $display("[%0t] LOCK_ERROR : SYS_PLL_TEST_1 XTG6(lock) = %b , expect 1", $realtime, test_chip_top.PLL_SYS_TESTOUT);
     end
 
     // TESTSEL=10 (pfd clk) , XTG6 = 24MHz (23~25MHz)
     test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_1 , 32'h0043_b053);
     test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0007);   // CFG_EN : load
     test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0000);
-    clk_freq_meas(PLL_SYS_TESTOUT , 24.0 , "SYS_PLL_TEST_1_PFD" , 1000 , 100.0/24.0);
+    clk_freq_meas(test_chip_top.PLL_SYS_TESTOUT , 24.0 , "SYS_PLL_TEST_1_PFD" , 1000 , 100.0/24.0);
 
     //==================================================
     // SYS_PLL_TEST_2
@@ -176,18 +176,18 @@ begin
     test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0007);   // CFG_EN : load
     test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0000);
     #100us;                                                                   // wait INNO_PLL stable
-    if (PLL_SYS_TESTOUT === 1'b1)
+    if (test_chip_top.PLL_SYS_TESTOUT === 1'b1)
         $display("[%0t] LOCK_PASS  : SYS_PLL_TEST_2 XTG6(lock) = 1", $realtime);
     else begin
         clk_err_cnt = clk_err_cnt + 1;
-        $display("[%0t] LOCK_ERROR : SYS_PLL_TEST_2 XTG6(lock) = %b , expect 1", $realtime, PLL_SYS_TESTOUT);
+        $display("[%0t] LOCK_ERROR : SYS_PLL_TEST_2 XTG6(lock) = %b , expect 1", $realtime, test_chip_top.PLL_SYS_TESTOUT);
     end
 
     // TESTSEL=10 (pfd clk) , XTG6 = 24MHz (23~25MHz)
     test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_SYS_CFG_1 , 32'h0076_b085);
     test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0007);   // CFG_EN : load
     test_chip_top.u_es_spi_master.ES_SPI_WR(PLL_CFG_EN    , 32'h0000_0000);
-    clk_freq_meas(PLL_SYS_TESTOUT , 24.0 , "SYS_PLL_TEST_2_PFD" , 1000 , 100.0/24.0);
+    clk_freq_meas(test_chip_top.PLL_SYS_TESTOUT , 24.0 , "SYS_PLL_TEST_2_PFD" , 1000 , 100.0/24.0);
 
     //==================================================
     // release strap pins & summary
